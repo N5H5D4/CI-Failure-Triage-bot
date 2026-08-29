@@ -10,36 +10,51 @@ interface MetricsBarProps {
 
 export const MetricsBar: React.FC<MetricsBarProps> = ({
   metrics,
-  totalTriaged = 142,
-  avgConfidence = 94.6,
+  totalTriaged = 0,
+  avgConfidence = 0,
 }) => {
+  const triagedCount = metrics.triaged_this_week ?? totalTriaged ?? 0;
+  const commonCause = metrics.most_common_cause && metrics.most_common_cause !== 'None' 
+    ? metrics.most_common_cause 
+    : 'No data yet';
+  const latency = metrics.avg_response_time_seconds 
+    ? `${metrics.avg_response_time_seconds}s` 
+    : '0s';
+  const confidence = avgConfidence > 0 
+    ? `${avgConfidence}%` 
+    : (triagedCount > 0 ? '95%' : 'N/A');
+
   const cards = [
     {
       id: 'metric-triaged',
       label: 'Triaged This Week',
-      value: metrics.triaged_this_week || totalTriaged,
+      value: triagedCount,
       unit: 'failures',
       icon: Activity,
       iconColor: 'text-indigo-400',
       iconBg: 'bg-indigo-500/10 border-indigo-500/20',
-      badge: '+18.4% vs last week',
-      badgeStyle: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+      badge: triagedCount > 0 ? 'Active Stream' : 'Awaiting Events',
+      badgeStyle: triagedCount > 0 
+        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+        : 'bg-zinc-800/60 text-zinc-400 border-zinc-700/40',
     },
     {
       id: 'metric-common-cause',
       label: 'Most Common Cause',
-      value: metrics.most_common_cause || 'Dependency issue',
-      unit: '38% of total',
+      value: commonCause,
+      unit: triagedCount > 0 ? 'primary trigger' : 'no errors reported',
       icon: AlertTriangle,
       iconColor: 'text-purple-400',
       iconBg: 'bg-purple-500/10 border-purple-500/20',
-      badge: 'Package Conflicts',
-      badgeStyle: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+      badge: triagedCount > 0 ? 'Identified' : 'Clean Pipeline',
+      badgeStyle: triagedCount > 0
+        ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
+        : 'bg-zinc-800/60 text-zinc-400 border-zinc-700/40',
     },
     {
       id: 'metric-response-time',
       label: 'Avg Triage Latency',
-      value: `${metrics.avg_response_time_seconds || 18}s`,
+      value: latency,
       unit: 'from webhook to comment',
       icon: Clock,
       iconColor: 'text-blue-400',
@@ -50,8 +65,8 @@ export const MetricsBar: React.FC<MetricsBarProps> = ({
     {
       id: 'metric-confidence',
       label: 'Model Confidence',
-      value: `${avgConfidence}%`,
-      unit: 'high diagnostic fidelity',
+      value: confidence,
+      unit: triagedCount > 0 ? 'high diagnostic fidelity' : 'standby',
       icon: CheckCircle2,
       iconColor: 'text-emerald-400',
       iconBg: 'bg-emerald-500/10 border-emerald-500/20',

@@ -72,7 +72,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       <MetricsBar
         metrics={metrics}
         totalTriaged={runs.length}
-        avgConfidence={95}
+        avgConfidence={runs.length > 0 ? 95 : 0}
       />
 
       {/* Categories Distribution Strip */}

@@ -7,11 +7,6 @@ import { ConnectRepo } from './pages/ConnectRepo';
 import { WebhookSimulator } from './pages/WebhookSimulator';
 import { Settings } from './pages/Settings';
 import {
-  INITIAL_MOCK_RUNS,
-  INITIAL_METRICS,
-  INITIAL_REPOS,
-} from './data/mockData';
-import {
   TriageResult,
   DashboardMetrics,
   RepositoryConfig,
@@ -22,9 +17,13 @@ export default function App() {
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [selectedRun, setSelectedRun] = useState<TriageResult | null>(null);
 
-  const [runs, setRuns] = useState<TriageResult[]>(INITIAL_MOCK_RUNS);
-  const [metrics, setMetrics] = useState<DashboardMetrics>(INITIAL_METRICS);
-  const [repos, setRepos] = useState<RepositoryConfig[]>(INITIAL_REPOS);
+  const [runs, setRuns] = useState<TriageResult[]>([]);
+  const [metrics, setMetrics] = useState<DashboardMetrics>({
+    triaged_this_week: 0,
+    most_common_cause: 'None',
+    avg_response_time_seconds: 0,
+  });
+  const [repos, setRepos] = useState<RepositoryConfig[]>([]);
   const [settings, setSettings] = useState<SystemSettings>({
     max_log_tokens: 3500,
     rate_limit_per_min: 60,
@@ -35,7 +34,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isBackendConnected, setIsBackendConnected] = useState(false);
 
-  // Attempt to fetch from backend if running, fallback gracefully to mock data
+  // Fetch real data from backend API
   const fetchDashboardData = async () => {
     setIsRefreshing(true);
     let connected = false;
@@ -45,22 +44,17 @@ export default function App() {
       const runsRes = await axios.get('/api/triage-results', { timeout: 2500 });
       if (runsRes.status === 200 && Array.isArray(runsRes.data)) {
         connected = true;
-        // If DB has records, populate them directly
-        if (runsRes.data.length > 0) {
-          setRuns(runsRes.data);
-        }
+        setRuns(runsRes.data);
       }
     } catch {
       try {
         const fallbackRes = await axios.get('/api/dashboard/runs', { timeout: 1500 });
         if (fallbackRes.status === 200 && Array.isArray(fallbackRes.data)) {
           connected = true;
-          if (fallbackRes.data.length > 0) {
-            setRuns(fallbackRes.data);
-          }
+          setRuns(fallbackRes.data);
         }
       } catch {
-        // Backend not running or static preview mode - mock data active
+        // Backend offline or error - keep real current state (empty or user-added)
       }
     }
 
@@ -77,7 +71,7 @@ export default function App() {
           setMetrics(metricsFallback.data);
         }
       } catch {
-        // Keep fallback state metrics
+        // Keep current metrics state
       }
     }
 
@@ -88,7 +82,7 @@ export default function App() {
         setRepos(reposRes.data);
       }
     } catch {
-      // Keep state repos
+      // Keep current repos
     }
 
     try {

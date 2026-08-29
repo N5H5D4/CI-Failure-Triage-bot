@@ -10,3 +10,10 @@ uvicorn main:app --reload --port 8000
 
 //frontend
 npm run dev
+
+//env
+GITHUB_TOKEN
+CLAUDE_API_KEY
+WEBHOOK_SECRET
+PORT=8000
+HOST=0.0.0.0
