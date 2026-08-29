@@ -6,9 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
-
 
 # Automatically create all database tables in SQLite/PostgreSQL
 Base.metadata.create_all(bind=engine)
@@ -54,5 +52,5 @@ def read_root():
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))
+    port = in(os.getenv("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
