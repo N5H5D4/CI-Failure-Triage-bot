@@ -1,0 +1,6 @@
+{
+  "name": "CI Failure Triage Bot",
+  "description": "Automated CI failure triage bot and monitoring dashboard powered by AI to diagnose failed CI logs and post remediation reports to GitHub PRs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
