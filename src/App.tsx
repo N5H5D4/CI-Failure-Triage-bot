@@ -194,10 +194,10 @@ export default function App() {
       prev.map((r) =>
         r.run_id === runId
           ? {
-              ...r,
-              status: 'posted',
-              github_comment_url: `https://github.com/${r.repo_name}/pull/${r.pr_number || 1}#comment-${Date.now()}`,
-            }
+            ...r,
+            status: 'posted',
+            github_comment_url: `https://github.com/${r.repo_name}/pull/${r.pr_number || 1}#comment-${Date.now()}`,
+          }
           : r
       )
     );
@@ -205,10 +205,10 @@ export default function App() {
       setSelectedRun((prev) =>
         prev
           ? {
-              ...prev,
-              status: 'posted',
-              github_comment_url: `https://github.com/${prev.repo_name}/pull/${prev.pr_number || 1}#comment-${Date.now()}`,
-            }
+            ...prev,
+            status: 'posted',
+            github_comment_url: `https://github.com/${prev.repo_name}/pull/${prev.pr_number || 1}#comment-${Date.now()}`,
+          }
           : null
       );
     }
@@ -217,7 +217,13 @@ export default function App() {
   const handleReprocess = async (runId: number) => {
     setIsLoading(true);
     try {
-      await axios.post(`/api/runs/${runId}/retry`, {}, { timeout: 10000 });
+      const res = await axios.post(`/api/runs/${runId}/retry`, {}, { timeout: 10000 });
+      if (res.data) {
+        setRuns((prev) => prev.map((r) => (r.run_id === runId ? res.data : r)));
+        if (selectedRun && selectedRun.run_id === runId) {
+          setSelectedRun(res.data);
+        }
+      }
     } catch {
       // Handled or local simulation
     }
@@ -225,8 +231,40 @@ export default function App() {
     setIsLoading(false);
   };
 
+  const handleDeleteRun = async (run: TriageResult) => {
+    const runId = run.run_id;
+    try {
+      await axios.delete(`/api/runs/${runId}`, { timeout: 3000 });
+    } catch (err) {
+      console.warn('Backend delete run warning:', err);
+    }
+    setRuns((prev) =>
+      prev.filter((r) => r.run_id !== runId && (run.id ? r.id !== run.id : true))
+    );
+    if (selectedRun && (selectedRun.run_id === runId || (run.id && selectedRun.id === run.id))) {
+      setSelectedRun(null);
+      setCurrentTab('dashboard');
+    }
+  };
+
+  const handleClearSimulated = async () => {
+    try {
+      await axios.delete('/api/triage-results/clear-simulated', { timeout: 3000 });
+    } catch (err) {
+      console.warn('Backend clear simulated warning:', err);
+    }
+    setRuns((prev) =>
+      prev.filter(
+        (r) =>
+          !r.is_simulated &&
+          !r.repo_name?.toLowerCase().includes('simulated') &&
+          !r.raw_response?.includes('"simulated": true')
+      )
+    );
+  };
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans selection:bg-indigo-600 selection:text-white antialiased">
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-emerald-600 selection:text-white antialiased">
       {/* Global Header & Nav */}
       <Header
         currentTab={currentTab}
@@ -245,6 +283,8 @@ export default function App() {
             runs={runs}
             metrics={metrics}
             onSelectRun={handleSelectRun}
+            onDeleteRun={handleDeleteRun}
+            onClearSimulated={handleClearSimulated}
             onOpenSimulator={() => setCurrentTab('simulator')}
             isLoading={isLoading}
           />
@@ -256,6 +296,7 @@ export default function App() {
             onBack={handleBackToDashboard}
             onPostComment={handlePostComment}
             onReprocess={handleReprocess}
+            onDelete={handleDeleteRun}
           />
         )}
 
@@ -269,7 +310,10 @@ export default function App() {
         )}
 
         {currentTab === 'simulator' && (
-          <WebhookSimulator onSimulateComplete={handleSimulateComplete} />
+          <WebhookSimulator
+            repos={repos}
+            onSimulateComplete={handleSimulateComplete}
+          />
         )}
 
         {currentTab === 'settings' && (
@@ -280,16 +324,12 @@ export default function App() {
         )}
       </main>
 
-      {/* Global Sophisticated Dark Footer */}
-      <footer className="border-t border-zinc-900 bg-zinc-950 py-4 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between text-xs text-zinc-500 gap-2">
+      {/* Global Footer */}
+      <footer className="border-t border-slate-200 bg-white py-4 mt-auto">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between text-xs text-slate-500">
           <div className="flex items-center space-x-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
             <span>Clean Architecture Triage Engine • FastAPI + Anthropic Claude</span>
-          </div>
-          <div className="flex items-center space-x-4">
-            <span className="text-zinc-600">Theme: Sophisticated Dark</span>
-            <span>v1.4.0</span>
           </div>
         </div>
       </footer>

@@ -1,63 +1,100 @@
 # backend/services/log_trimmer.py
 import re
-from typing import List
+from typing import List, Tuple
 
 class LogTrimmer:
-    """Service to strip ANSI terminal escape sequences and intelligently extract error lines & tail logs."""
+    """Service to strip ANSI escape sequences and cleanly extract error sections without noise or harmless warnings."""
 
     def __init__(self, max_chars: int = 12000):
-        # Default ~12,000 chars roughly equals ~3,000 LLM tokens
         self.max_chars = max_chars
         self.ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
         self.error_patterns: List[re.Pattern] = [
-            re.compile(r'(?i)(error|failed|failure|exception|traceback|panic|fatal|assert)', re.MULTILINE),
-            re.compile(r'(?i)(npm ERR!|yarn error|pip error|ModuleNotFoundError|SyntaxError)', re.MULTILINE),
-            re.compile(r'(?i)(FAIL\s+|FAILED\s+|AssertionError|TypeError|ReferenceError)', re.MULTILINE)
+            re.compile(r'(?i)(##\[error\]|ERROR:\s*|\berror\b\s+during\s+build|transform failed|syntaxerror|typeerror|referenceerror|assertionerror)', re.MULTILINE),
+            re.compile(r'(?i)(expected\s+".*?"\s+but\s+found|unexpected\s+".*?"|unexpected\s+token|cannot find name|cannot find module)', re.MULTILINE),
+            re.compile(r'(?i)(FAIL\s+|FAILED\s+|npm ERR!|yarn error|pip error|ModuleNotFoundError|traceback \(most recent call last\))', re.MULTILINE),
+            re.compile(r'(?i)(process completed with exit code [1-9]|command failed with exit code)', re.MULTILINE)
         ]
+        self.ignore_notice_pattern = re.compile(r'(?i)(npm warn|deprecationwarning|warning:|\bwarn\b|found 0 vulnerabilities|looking for funding)', re.MULTILINE)
 
     def trim(self, raw_log: str) -> str:
-        """Strips ANSI codes and extracts high-priority error sections + tail lines."""
+        """Strips ANSI codes and extracts high-priority error sections cleanly."""
         if not raw_log:
             return ""
 
-        # 1. Strip ANSI escape sequences (colors, cursor movements)
+        # 1. Strip ANSI escape sequences
         clean_log = self.ansi_escape.sub('', raw_log).replace('\r\n', '\n')
 
         # If log is already small enough, return as-is
         if len(clean_log) <= self.max_chars:
             return clean_log
 
-        # 2. Extract error context lines and preserve the most recent log tail
         lines = clean_log.split('\n')
         total_lines = len(lines)
+        if total_lines == 0:
+            return ""
 
-        highlighted_lines = []
-        # Look for error indicators in all lines
+        # 2. Collect matched error line indices, skipping harmless warnings
+        matched_indices = []
         for i, line in enumerate(lines):
+            line_str = line.strip()
+            if not line_str:
+                continue
+            # Skip benign warnings unless they also have fatal error indicators
+            if self.ignore_notice_pattern.search(line_str) and "error" not in line_str.lower():
+                continue
+
             for pat in self.error_patterns:
-                if pat.search(line):
-                    # grab window around error line
-                    start = max(0, i - 3)
-                    end = min(total_lines, i + 4)
-                    highlighted_lines.extend(lines[start:end])
+                if pat.search(line_str):
+                    matched_indices.append(i)
                     break
 
-        # Remove consecutive duplicate lines
-        deduped_errors = []
-        for l in highlighted_lines:
-            if not deduped_errors or deduped_errors[-1] != l:
-                deduped_errors.append(l)
+        # 3. Create context windows around error occurrences
+        raw_ranges: List[Tuple[int, int]] = []
+        for idx in matched_indices:
+            start = max(0, idx - 6)
+            end = min(total_lines - 1, idx + 12)
+            raw_ranges.append((start, end))
 
-        error_excerpt = "\n".join(deduped_errors)
+        # Always include the last 20 lines (summary, final error exit code)
+        tail_start = max(0, total_lines - 20)
+        raw_ranges.append((tail_start, total_lines - 1))
 
-        # 3. Always include the bottom tail lines (where failures and summary exit codes reside)
-        tail_chars = int(self.max_chars * 0.7)
-        tail_part = clean_log[-tail_chars:]
+        if not raw_ranges:
+            # Fallback if no specific error keyword matched: return last max_chars cleanly on line boundaries
+            tail_lines = clean_log[-self.max_chars:].split('\n')
+            return "...[LOG TRUNCATED (FIRST PORTION EXCLUDED)]...\n" + "\n".join(tail_lines[1:])
 
-        if deduped_errors and len(error_excerpt) > 100:
-            combined = f"--- [DETECTED ERROR SIGNALS & STACK TRACES] ---\n{error_excerpt[:int(self.max_chars * 0.3)]}\n\n--- [TRAILING LOGS & SUMMARY] ---\n{tail_part}"
-            if len(combined) > self.max_chars:
-                return f"...[LOG TRUNCATED FOR LLM CONTEXT LIMIT]...\n" + combined[-self.max_chars:]
-            return combined
-        
-        return f"...[LOG TRUNCATED (FIRST PORTION EXCLUDED)]...\n" + clean_log[-self.max_chars:]
+        # 4. Merge overlapping / adjacent intervals
+        raw_ranges.sort(key=lambda r: r[0])
+        merged_ranges: List[Tuple[int, int]] = []
+        for r_start, r_end in raw_ranges:
+            if not merged_ranges:
+                merged_ranges.append((r_start, r_end))
+            else:
+                prev_start, prev_end = merged_ranges[-1]
+                # If overlapping or adjacent (gap <= 3 lines), merge
+                if r_start <= prev_end + 3:
+                    merged_ranges[-1] = (prev_start, max(prev_end, r_end))
+                else:
+                    merged_ranges.append((r_start, r_end))
+
+        # 5. Assemble formatted log blocks
+        blocks: List[str] = []
+        prev_end = 0
+        for b_start, b_end in merged_ranges:
+            skipped = b_start - prev_end
+            if skipped > 2:
+                blocks.append(f"\n... [Skipped {skipped} setup/intermediate lines] ...\n")
+            blocks.append("\n".join(lines[b_start:b_end + 1]))
+            prev_end = b_end + 1
+
+        result = "\n".join(blocks).strip()
+
+        # If still exceeding max_chars, trim gracefully from top of result on line boundary
+        if len(result) > self.max_chars:
+            trimmed_lines = result[-self.max_chars:].split('\n')
+            return "...[LOG TRUNCATED FOR LLM CONTEXT LIMIT]...\n" + "\n".join(trimmed_lines[1:])
+
+        return result
+
+

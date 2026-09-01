@@ -1,6 +1,7 @@
 import React from 'react';
-import { Activity, AlertTriangle, Clock, Zap, TrendingUp, CheckCircle2 } from 'lucide-react';
+import { Activity, AlertTriangle, Clock, CheckCircle2 } from 'lucide-react';
 import { DashboardMetrics } from '../types';
+import { theme } from '../styles/theme';
 
 interface MetricsBarProps {
   metrics: DashboardMetrics;
@@ -14,64 +15,64 @@ export const MetricsBar: React.FC<MetricsBarProps> = ({
   avgConfidence = 0,
 }) => {
   const triagedCount = metrics.triaged_this_week ?? totalTriaged ?? 0;
-  const commonCause = metrics.most_common_cause && metrics.most_common_cause !== 'None' 
-    ? metrics.most_common_cause 
+  const commonCause = metrics.most_common_cause && metrics.most_common_cause !== 'None'
+    ? metrics.most_common_cause
     : 'No data yet';
-  const latency = metrics.avg_response_time_seconds 
-    ? `${metrics.avg_response_time_seconds}s` 
+  const latency = metrics.avg_response_time_seconds
+    ? `${metrics.avg_response_time_seconds}s`
     : '0s';
-  const confidence = avgConfidence > 0 
-    ? `${avgConfidence}%` 
+  const confidence = avgConfidence > 0
+    ? `${avgConfidence}%`
     : (triagedCount > 0 ? '95%' : 'N/A');
 
   const cards = [
     {
       id: 'metric-triaged',
-      label: 'Triaged This Week',
+      label: 'Failures Triaged This Week',
       value: triagedCount,
-      unit: 'failures',
+      unit: 'runs',
       icon: Activity,
-      iconColor: 'text-indigo-400',
-      iconBg: 'bg-indigo-500/10 border-indigo-500/20',
-      badge: triagedCount > 0 ? 'Active Stream' : 'Awaiting Events',
-      badgeStyle: triagedCount > 0 
-        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-        : 'bg-zinc-800/60 text-zinc-400 border-zinc-700/40',
+      iconColor: 'text-emerald-600',
+      iconBg: 'bg-emerald-50 border-emerald-200',
+      badge: triagedCount > 0 ? 'Live Stream Active' : 'Awaiting CI Events',
+      badgeStyle: triagedCount > 0
+        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+        : 'bg-slate-100 text-slate-600 border-slate-200',
     },
     {
       id: 'metric-common-cause',
       label: 'Most Common Cause',
       value: commonCause,
-      unit: triagedCount > 0 ? 'primary trigger' : 'no errors reported',
+      unit: triagedCount > 0 ? 'dominant' : 'clean builds',
       icon: AlertTriangle,
-      iconColor: 'text-purple-400',
-      iconBg: 'bg-purple-500/10 border-purple-500/20',
-      badge: triagedCount > 0 ? 'Identified' : 'Clean Pipeline',
+      iconColor: 'text-purple-600',
+      iconBg: 'bg-purple-50 border-purple-200',
+      badge: triagedCount > 0 ? 'Detected' : 'Clean Pipeline',
       badgeStyle: triagedCount > 0
-        ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
-        : 'bg-zinc-800/60 text-zinc-400 border-zinc-700/40',
+        ? 'bg-purple-50 text-purple-700 border-purple-200'
+        : 'bg-slate-100 text-slate-600 border-slate-200',
     },
     {
       id: 'metric-response-time',
-      label: 'Avg Triage Latency',
+      label: 'Avg Diagnosis Latency',
       value: latency,
-      unit: 'from webhook to comment',
+      unit: 'webhook to triage',
       icon: Clock,
-      iconColor: 'text-blue-400',
-      iconBg: 'bg-blue-500/10 border-blue-500/20',
-      badge: 'Real-time Async',
-      badgeStyle: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+      iconColor: 'text-blue-600',
+      iconBg: 'bg-blue-50 border-blue-200',
+      badge: 'Async Webhook',
+      badgeStyle: 'bg-blue-50 text-blue-700 border-blue-200',
     },
     {
       id: 'metric-confidence',
       label: 'Model Confidence',
       value: confidence,
-      unit: triagedCount > 0 ? 'high diagnostic fidelity' : 'standby',
+      unit: triagedCount > 0 ? 'high precision' : 'standby',
       icon: CheckCircle2,
-      iconColor: 'text-emerald-400',
-      iconBg: 'bg-emerald-500/10 border-emerald-500/20',
+      iconColor: 'text-teal-600',
+      iconBg: 'bg-teal-50 border-teal-200',
       badge: 'Claude 3.5 Sonnet',
-      badgeStyle: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
+      badgeStyle: 'bg-teal-50 text-teal-700 border-teal-200',
     },
   ];
 
@@ -83,10 +84,10 @@ export const MetricsBar: React.FC<MetricsBarProps> = ({
           <div
             key={card.id}
             id={card.id}
-            className="bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 rounded-xl p-4 sm:p-5 transition-all duration-200 shadow-sm"
+            className={theme.cards.interactive}
           >
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
                 {card.label}
               </span>
               <div
@@ -98,16 +99,16 @@ export const MetricsBar: React.FC<MetricsBarProps> = ({
 
             <div className="mt-3 flex items-baseline justify-between">
               <div>
-                <span className="text-2xl font-bold tracking-tight text-zinc-100">
+                <span className="text-2xl font-bold tracking-tight text-slate-900">
                   {card.value}
                 </span>
-                <span className="ml-2 text-xs text-zinc-500">{card.unit}</span>
+                <span className="ml-2 text-xs text-slate-500 font-medium">{card.unit}</span>
               </div>
             </div>
 
-            <div className="mt-3 pt-3 border-t border-zinc-800/80 flex items-center justify-between">
+            <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between">
               <span
-                className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium border ${card.badgeStyle}`}
+                className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border ${card.badgeStyle}`}
               >
                 {card.badge}
               </span>

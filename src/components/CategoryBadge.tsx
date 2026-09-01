@@ -1,4 +1,5 @@
 import React from 'react';
+import { theme } from '../styles/theme';
 
 interface CategoryBadgeProps {
   category: string;
@@ -18,47 +19,29 @@ export const CategoryBadge: React.FC<CategoryBadgeProps> = ({
       case 'syntax_error':
       case 'syntax error':
       case 'build_failure':
-        return {
-          bg: 'bg-red-500/10 border-red-500/20 text-red-400',
-          dot: 'bg-red-400',
-          label: 'Syntax Error',
-        };
+        return theme.categoryStyles.syntax_error;
       case 'test_failure':
       case 'test failure':
       case 'unit_test_failed':
-        return {
-          bg: 'bg-amber-500/10 border-amber-500/20 text-amber-400',
-          dot: 'bg-amber-400',
-          label: 'Test Failure',
-        };
+        return theme.categoryStyles.test_failure;
       case 'dependency_issue':
       case 'dependency issue':
       case 'missing_package':
-        return {
-          bg: 'bg-purple-500/10 border-purple-500/20 text-purple-400',
-          dot: 'bg-purple-400',
-          label: 'Dependency Issue',
-        };
+        return theme.categoryStyles.dependency_issue;
       case 'flaky_test':
       case 'flaky test':
-        return {
-          bg: 'bg-orange-500/10 border-orange-500/20 text-orange-400',
-          dot: 'bg-orange-400',
-          label: 'Flaky Test',
-        };
+        return theme.categoryStyles.flaky_test;
       case 'infrastructure_timeout':
       case 'infrastructure timeout':
       case 'timeout':
-        return {
-          bg: 'bg-blue-500/10 border-blue-500/20 text-blue-400',
-          dot: 'bg-blue-400',
-          label: 'Infra / Timeout',
-        };
+        return theme.categoryStyles.infrastructure_timeout;
+      case 'configuration_error':
+      case 'config_error':
+        return theme.categoryStyles.configuration_error;
       default:
         return {
-          bg: 'bg-zinc-800/80 border-zinc-700/60 text-zinc-300',
-          dot: 'bg-zinc-400',
-          label: category.replace(/_/g, ' '),
+          ...theme.categoryStyles.unknown,
+          label: category ? category.replace(/_/g, ' ') : 'Unknown',
         };
     }
   };
@@ -73,7 +56,7 @@ export const CategoryBadge: React.FC<CategoryBadgeProps> = ({
 
   return (
     <span
-      className={`inline-flex items-center rounded-full border font-medium tracking-wide uppercase whitespace-nowrap transition-colors ${style.bg} ${sizeClasses}`}
+      className={`inline-flex items-center rounded-full border font-medium tracking-wide whitespace-nowrap transition-colors ${style.bg} ${sizeClasses}`}
       title={category}
     >
       {showDot && (
@@ -87,3 +70,4 @@ export const CategoryBadge: React.FC<CategoryBadgeProps> = ({
 };
 
 export default CategoryBadge;
+

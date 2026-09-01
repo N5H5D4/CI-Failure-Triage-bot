@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from database import get_db
 from models.models import TriageResult
-from models.schemas import TriageResultDTO
+from models.schemas import TriageResultDTO, SimulateTriageRequest
 from services.triage_service import TriageService
 
 router = APIRouter(prefix="/api", tags=["Dashboard"])
@@ -18,16 +18,53 @@ triage_service = TriageService()
 async def get_triage_results(
     category: Optional[str] = Query(
         None, description="Filter by failure category"),
-    limit: int = Query(50, ge=1, le=200),
+    is_simulated: Optional[bool] = Query(
+        None, description="Filter by simulated runs"),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db)
 ):
     """Retrieves list of recent triaged failures sorted by creation time descending."""
     query = db.query(TriageResult)
     if category and category != "all":
         query = query.filter(TriageResult.failure_category == category)
+    if is_simulated is not None:
+        query = query.filter(TriageResult.is_simulated == is_simulated)
 
-    results = query.order_by(TriageResult.created_at.desc()).limit(limit).all()
+    results = query.order_by(TriageResult.created_at.desc()).offset(
+        offset).limit(limit).all()
     return results
+
+
+@router.delete("/runs/{run_id}")
+@router.delete("/dashboard/runs/{run_id}")
+async def delete_run(run_id: int, db: Session = Depends(get_db)):
+    """Deletes a specific triage result run by run_id."""
+    run = db.query(TriageResult).filter(TriageResult.run_id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
+    db.delete(run)
+    db.commit()
+    return {"success": True, "message": f"Run #{run_id} deleted successfully"}
+
+
+@router.delete("/triage-results/clear-simulated")
+async def clear_simulated_runs(db: Session = Depends(get_db)):
+    """Bulk deletes all simulated triage runs from database."""
+    deleted_count = db.query(TriageResult).filter(
+        (TriageResult.is_simulated == True) |
+        (TriageResult.repo_name.like("%simulated%"))
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"success": True, "deleted_count": deleted_count}
+
+
+@router.delete("/triage-results/clear-all")
+async def clear_all_runs(db: Session = Depends(get_db)):
+    """Deletes all failure triage history rows from database."""
+    deleted_count = db.query(TriageResult).delete(synchronize_session=False)
+    db.commit()
+    return {"success": True, "deleted_count": deleted_count}
 
 
 @router.get("/runs/{run_id}", response_model=TriageResultDTO)
@@ -43,6 +80,22 @@ async def get_run_detail(run_id: int, db: Session = Depends(get_db)):
 @router.post("/runs/{run_id}/retry", response_model=TriageResultDTO)
 async def retry_triage(run_id: int, db: Session = Depends(get_db)):
     """Re-executes triage analysis for a previously failed or existing run."""
+    run = db.query(TriageResult).filter(TriageResult.run_id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
+
+    updated = await triage_service.execute_triage(
+        repo_name=run.repo_name,
+        run_id=run.run_id,
+        pr_number=run.pr_number
+    )
+    return updated
+
+
+@router.post("/runs/{run_id}/post_comment", response_model=TriageResultDTO)
+@router.post("/dashboard/runs/{run_id}/post_comment", response_model=TriageResultDTO)
+async def post_comment_to_github(run_id: int, db: Session = Depends(get_db)):
+    """Manually triggers posting the triage analysis report to GitHub PR/Commit."""
     run = db.query(TriageResult).filter(TriageResult.run_id == run_id).first()
     if not run:
         raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
@@ -90,78 +143,19 @@ async def get_dashboard_metrics(db: Session = Depends(get_db)):
 
 @router.post("/simulate-triage", response_model=TriageResultDTO)
 async def simulate_triage_run(
-    repo_name: str = Query("octocat/auth-service"),
-    run_id: int = Query(128450),
-    pr_number: Optional[int] = Query(128),
-    sample_type: str = Query("dependency_issue"),
+    req: SimulateTriageRequest,
     db: Session = Depends(get_db)
 ):
-    """Simulates a real CI failure event with predefined realistic logs for demonstration."""
-    sample_logs = {
-        "dependency_issue": """
-[info] Running npm install --frozen-lockfile
-npm ERR! code ERESOLVE
-npm ERR! ERESOLVE could not resolve
-npm ERR! 
-npm ERR! While resolving: @octocat/auth-core@3.4.0
-npm ERR! Found: requests@2.31.0
-npm ERR! node_modules/requests
-npm ERR!   requests@"^2.31.0" from the root project
-npm ERR! 
-npm ERR! Could not resolve dependency:
-npm ERR! peer urllib3@">=2.2.1" from requests@2.31.0
-npm ERR! Conflicting with root package urllib3@1.26.15 pinned in requirements.txt:14
-npm ERR! Fix the upstream dependency conflict, or retry with --legacy-peer-deps
-npm ERR! A complete log of this run can be found in: /home/runner/.npm/_logs/2026-08-27.log
-##[error]Process completed with exit code 1.
-""",
-        "syntax_error": """
-[info] Compiling TypeScript project src/auth/token.ts
-src/auth/token.ts(42,15): error TS2339: Property 'refreshToken' does not exist on type 'UserSession'.
-src/auth/token.ts(58,9): error TS1005: ';' expected after return statement.
-[error] Found 2 compilation errors.
-##[error]Process completed with exit code 2.
-""",
-        "test_failure": """
-[info] Running pytest unit tests
-============================= test session starts ==============================
-collected 24 items
+    """Executes full real AI triage on user-provided simulated CI raw log without requiring external GitHub webhook."""
+    import time
+    run_id = req.run_id or int(time.time() * 1000) % 10000000000
 
-tests/test_auth.py ....F............                                      [100%]
-
-=================================== FAILURES ===================================
-___________________________ test_token_race_condition ___________________________
-
-    def test_token_race_condition(auth_client):
-        session = auth_client.create_session("user_99")
-        refreshed = auth_client.refresh_parallel(session, workers=5)
->       assert refreshed.success_count == 5
-E       AssertionError: assert 4 == 5
-E       +  where 4 = SessionResult(success_count=4, errors=['Lock contention on redis key token:user_99']).success_count
-
-tests/test_auth.py:84: AssertionError
-=========================== 1 failed, 23 passed in 4.12s ===========================
-##[error]Process completed with exit code 1.
-""",
-        "flaky_test": """
-[info] Running End-to-End Cypress Integration Tests
-Running: auth/sso_flow.cy.js
-  ✓ should display login screen (420ms)
-  1) should exchange OAuth token within 500ms
-  0 passing (15s)
-  1 failing
-
-  1) SSO Flow - should exchange OAuth token within 500ms:
-     CypressError: Timed out retrying after 10000ms: Expected to find element: `[data-testid="user-avatar"]`, but never found it. Network request /api/oauth/callback was aborted due to high socket latency.
-##[error]Process completed with exit code 1.
-"""
-    }
-
-    log_text = sample_logs.get(sample_type, sample_logs["dependency_issue"])
+    # Run real pipeline with custom raw log override
     result = await triage_service.execute_triage(
-        repo_name=repo_name,
+        repo_name=req.repo_name.strip() if req.repo_name else "simulated/repo",
         run_id=run_id,
-        pr_number=pr_number,
-        raw_log_override=log_text
+        pr_number=req.pr_number,
+        raw_log_override=req.raw_log.strip(),
+        is_simulated=True
     )
     return result

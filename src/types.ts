@@ -10,6 +10,7 @@ export interface TriageResult {
   trimmed_log?: string | null;
   raw_response?: string | null;
   status: 'pending' | 'posted' | 'error';
+  is_simulated?: boolean;
   github_comment_url?: string | null;
   created_at?: string;
 }

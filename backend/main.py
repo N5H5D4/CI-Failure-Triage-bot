@@ -1,15 +1,27 @@
 # backend/main.py
 from controllers import webhook, dashboard, repo, settings
 from database import engine, Base
+from sqlalchemy import text
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
+# Load environment variables from .env file
 load_dotenv()
+
 
 # Automatically create all database tables in SQLite/PostgreSQL
 Base.metadata.create_all(bind=engine)
+
+# Ensure is_simulated column exists in case triage.db already exists
+try:
+    with engine.connect() as conn:
+        conn.execute(
+            text("ALTER TABLE triage_results ADD COLUMN is_simulated BOOLEAN DEFAULT 0"))
+        conn.commit()
+except Exception:
+    pass  # Column already exists or table freshly created
 
 app = FastAPI(
     title="CI Failure Triage Bot API",

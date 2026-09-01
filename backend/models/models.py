@@ -33,6 +33,7 @@ class TriageResult(Base):
     trimmed_log = Column(Text, nullable=True)
     raw_response = Column(Text, nullable=True)
     status = Column(String(30), default="pending")  # pending / posted / error
+    is_simulated = Column(Boolean, default=False, nullable=True)
     github_comment_url = Column(String(500), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
