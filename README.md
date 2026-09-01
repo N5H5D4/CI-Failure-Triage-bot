@@ -61,4 +61,6 @@ HOST=0.0.0.0
 
 ======================================
 
+Mọi Repository liên kết với app để test cần kích hoạt CI pipeline qua .github/workflows/ci.yml
+
 
