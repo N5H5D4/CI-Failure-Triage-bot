@@ -46,7 +46,7 @@ class TriageService:
         locations = []
         seen = set()
 
-        # Pattern 1: TypeScript tsc: src/components/HistoryPanel.tsx:25:9 - error TS1005: '>' expected.
+        # Pattern 1: TypeScript tsc standard: src/components/HistoryPanel.tsx:25:9 - error TS1005: '>' expected.
         ts_pattern = r'((?:src/|lib/|app/|tests?/|backend/|frontend/)[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+):(\d+):(\d+)\s*-\s*error\s*([^\n]+)'
         for m in re.finditer(ts_pattern, log_content):
             fpath = m.group(1)
@@ -58,8 +58,20 @@ class TriageService:
                 locations.append(
                     {"file": fpath, "line": lno, "error_msg": err_msg})
 
-        # Pattern 2: Vite / esbuild / TS paths with ERROR
-        esbuild_pattern = r'(?:file:\s*)?(?:[a-zA-Z0-9_\-./]+[/])?((?:src/|lib/|app/|tests?/|backend/|frontend/)[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+):(\d+)(?::\d+)?'
+        # Pattern 2: TypeScript GitHub Actions format: src/components/HistoryPanel.tsx(6,30): error TS1131: Property or signature expected.
+        ts_gha_pattern = r'((?:src/|lib/|app/|tests?/|backend/|frontend/)[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)\((\d+)(?:,\d+)?\):\s*error\s*([^\n]+)'
+        for m in re.finditer(ts_gha_pattern, log_content):
+            fpath = m.group(1)
+            lno = int(m.group(2))
+            err_msg = m.group(3).strip()
+            key = (fpath, lno)
+            if key not in seen:
+                seen.add(key)
+                locations.append(
+                    {"file": fpath, "line": lno, "error_msg": err_msg})
+
+        # Pattern 3: Vite / esbuild / TS paths with ERROR (including full /home/runner/... paths)
+        esbuild_pattern = r'(?:file:\s*)?(?:[a-zA-Z0-9_\-./]+[/])?((?:src/|lib/|app/|tests?/|backend/|frontend/)[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)[:\(](\d+)(?:[,:]\d+)?'
         for m in re.finditer(esbuild_pattern, log_content):
             fpath = m.group(1)
             lno = int(m.group(2))
@@ -69,7 +81,7 @@ class TriageService:
                 locations.append(
                     {"file": fpath, "line": lno, "error_msg": None})
 
-        # Pattern 3: Python pytest / traceback
+        # Pattern 4: Python pytest / traceback
         py_pattern = r'File "([a-zA-Z0-9_\-./]+\.py)", line (\d+)'
         for m in re.finditer(py_pattern, log_content):
             fpath = m.group(1)
@@ -234,13 +246,27 @@ class TriageService:
             # 7. Validate AI response format and constraints
             is_valid, parsed_analysis, err = self.validator.validate(
                 raw_ai_response)
-            if not is_valid or not parsed_analysis:
-                parsed_analysis = AIAnalysisOutput(
-                    failure_category="unknown",
-                    confidence_score=0.5,
-                    root_cause=f"AI output parsing warning: {err or 'Unknown format'}",
-                    suggested_fix="Check raw console log output directly on GitHub Actions."
+
+            # If AI response was unparseable or returned an unknown generic category, trigger contextual rule engine fallback
+            if not is_valid or not parsed_analysis or parsed_analysis.failure_category == "unknown":
+                print(
+                    f"[TriageService] AI output was invalid or unknown ({err}). Running high-fidelity rule engine fallback...")
+                fallback_raw = self.claude._fallback_local_analysis(
+                    raw_log=clean_log,
+                    code_context=combined_code_context,
+                    full_prompt=user_prompt
                 )
+                fb_valid, fb_parsed, fb_err = self.validator.validate(
+                    fallback_raw)
+                if fb_valid and fb_parsed and fb_parsed.failure_category != "unknown":
+                    parsed_analysis = fb_parsed
+                elif not parsed_analysis:
+                    parsed_analysis = fb_parsed or AIAnalysisOutput(
+                        failure_category="unknown",
+                        confidence_score=0.5,
+                        root_cause=f"AI output parsing warning: {err or 'Unknown format'}",
+                        suggested_fix="Check raw console log output directly on GitHub Actions."
+                    )
 
             # Update fields in record
             result_record.failure_category = parsed_analysis.failure_category

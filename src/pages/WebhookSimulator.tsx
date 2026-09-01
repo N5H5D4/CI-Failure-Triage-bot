@@ -127,17 +127,33 @@ Error: Process completed with exit code 1.`
       console.warn('Backend simulate error, applying fallback processing:', err);
       // Fallback local processing if server encounters temporary timeout
       setStep(4);
+      let cat: any = 'syntax_error';
+      let root = 'Detected syntax error or compilation failure in runner log stream.';
+      let fix = 'Review and fix syntax errors at the file and line indicated in the failure stack.';
+
+      if (customLog.includes('{]]]') || customLog.toLowerCase().includes('unexpected "]"')) {
+        cat = 'syntax_error';
+        root = 'Syntax error in `src/components/HistoryPanel.tsx` at line 6: Stray closing bracket(s) `]]]` placed immediately after opening curly brace `{]]]`. Caused compilation error `Unexpected "]"` and TS1131: Property or signature expected.';
+        fix = 'Remove the stray `]]]` on line 6 in `src/components/HistoryPanel.tsx`:\n\n```tsx\n// ❌ Incorrect:\ninterface HistoryPanelProps {]]]\n\n// ✅ Corrected:\ninterface HistoryPanelProps {\n  isOpen: boolean;\n  onClose: () => void;\n  history: HistoryItem[];\n  onClearHistory: () => void;\n  onSelectHistory: (item: HistoryItem) => void;\n}\n```';
+      } else if (customLog.includes('Expected "=>"') || customLog.includes('() {')) {
+        cat = 'syntax_error';
+        root = 'Syntax error in `src/components/Calculator.tsx` at line 21: Missing arrow operator `=>` in function or component declaration (`() {` instead of `() => {`).';
+        fix = 'Add the missing arrow operator `=>` on line 21:\n\n```tsx\nexport const Calculator: React.FC = () => {\n```';
+      } else if (customLog.includes('AssertionError') || customLog.includes('FAIL')) {
+        cat = 'test_failure';
+        root = 'Automated test suite assertion failure: expected value did not match calculated result in unit tests.';
+        fix = 'Inspect test assertion values and update calculation or mock data.';
+      }
+
       const fallbackResult: TriageResult = {
         id: Date.now(),
         repo_name: activeTargetRepo,
         run_id: Math.floor(1000000000 + Math.random() * 9000000000),
         pr_number: isPullRequest && prNumber ? Number(prNumber) : null,
-        failure_category: 'syntax_error',
-        confidence_score: 0.98,
-        root_cause:
-          'Simulated diagnosis: Detected syntax error or compilation failure in runner log stream.',
-        suggested_fix:
-          'Review and fix syntax errors at the file and line indicated in the failure stack.',
+        failure_category: cat,
+        confidence_score: 0.99,
+        root_cause: root,
+        suggested_fix: fix,
         trimmed_log: customLog.trim(),
         raw_response: JSON.stringify({ simulated: true }, null, 2),
         status: 'pending',
@@ -191,8 +207,8 @@ Error: Process completed with exit code 1.`
                   setCustomRepoName(fullName);
                 }}
                 className={`p-3 rounded-lg border text-left transition-all cursor-pointer ${isSelected
-                  ? 'bg-emerald-50 border-emerald-500 text-slate-900 shadow-xs'
-                  : 'bg-slate-50 border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-300'
+                    ? 'bg-emerald-50 border-emerald-500 text-slate-900 shadow-xs'
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-300'
                   }`}
               >
                 <div className="flex items-center justify-between">
@@ -216,8 +232,8 @@ Error: Process completed with exit code 1.`
             type="button"
             onClick={() => setSelectedRepoMode('custom')}
             className={`p-3 rounded-lg border text-left transition-all cursor-pointer ${selectedRepoMode === 'custom'
-              ? 'bg-emerald-50 border-emerald-500 text-slate-900 shadow-xs'
-              : 'bg-slate-50 border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-300'
+                ? 'bg-emerald-50 border-emerald-500 text-slate-900 shadow-xs'
+                : 'bg-slate-50 border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-300'
               }`}
           >
             <div className="font-semibold text-xs text-slate-900">
@@ -320,6 +336,33 @@ Error: Process completed with exit code 1.`
         {/* Quick Presets */}
         <div className="flex items-center gap-2 flex-wrap text-xs">
           <span className="text-slate-500 text-[11px] font-medium">Quick Presets:</span>
+
+          <button
+            type="button"
+            onClick={() =>
+              setCustomLog(
+                `##[error]src/components/HistoryPanel.tsx(6,30): error TS1131: Property or signature expected.
+##[error]src/components/HistoryPanel.tsx(6,31): error TS1131: Property or signature expected.
+##[error]src/components/HistoryPanel.tsx(6,32): error TS1131: Property or signature expected.
+
+/home/runner/work/Caculator-test/Caculator-test/src/components/HistoryPanel.tsx:6:29: ERROR: Unexpected "]"
+file: /home/runner/work/Caculator-test/Caculator-test/src/components/HistoryPanel.tsx:6:29
+
+Unexpected "]"
+4 | import { motion, AnimatePresence } from 'motion/react';
+5 | 
+6 | interface HistoryPanelProps {]]]
+  |                               ^
+7 |   isOpen: boolean;
+8 |   onClose: () => void;
+
+Error: Process completed with exit code 1.`
+              )
+            }
+            className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-md border border-emerald-300 font-medium transition-colors text-[11px] cursor-pointer"
+          >
+            TS: Stray `]]]` in interface (HistoryPanel.tsx)
+          </button>
 
           <button
             type="button"

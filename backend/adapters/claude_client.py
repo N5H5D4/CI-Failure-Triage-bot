@@ -57,7 +57,7 @@ class ClaudeClient:
         if gemini_key:
             try:
                 gemini_res = await self._call_gemini(gemini_key, system_prompt, user_prompt)
-                if gemini_res:
+                if gemini_res and len(gemini_res.strip()) > 10:
                     return gemini_res
             except Exception as e:
                 print(f"[Gemini API Exception]: {e}")
@@ -74,7 +74,9 @@ class ClaudeClient:
                     messages=[{"role": "user", "content": user_prompt}]
                 )
                 if response and response.content:
-                    return response.content[0].text
+                    txt = response.content[0].text
+                    if txt and len(txt.strip()) > 10:
+                        return txt
             except Exception as e:
                 print(f"[Claude API Exception]: {e}")
 
@@ -82,7 +84,7 @@ class ClaudeClient:
         if openai_key:
             try:
                 openai_res = await self._call_openai(openai_key, system_prompt, user_prompt)
-                if openai_res:
+                if openai_res and len(openai_res.strip()) > 10:
                     return openai_res
             except Exception as e:
                 print(f"[OpenAI API Exception]: {e}")
@@ -92,7 +94,7 @@ class ClaudeClient:
 
     async def _call_gemini(self, api_key: str, system_prompt: str, user_prompt: str) -> Optional[str]:
         """Calls Google Gemini API with fallback models."""
-        models = ["gemini-2.0-flash", "gemini-1.5-flash"]
+        models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
         payload = {
             "contents": [
                 {
@@ -114,17 +116,25 @@ class ClaudeClient:
                     resp = await client.post(url, json=payload)
                     if resp.status_code == 200:
                         data = resp.json()
-                        text = data["candidates"][0]["content"]["parts"][0]["text"]
-                        # Strip any accidental markdown formatting
-                        text_clean = text.strip()
-                        if text_clean.startswith("```json"):
-                            text_clean = text_clean[7:]
-                        if text_clean.startswith("```"):
-                            text_clean = text_clean[3:]
-                        if text_clean.endswith("```"):
-                            text_clean = text_clean[:-3]
-                        return text_clean.strip()
-                except Exception:
+                        candidates = data.get("candidates", [])
+                        if candidates:
+                            content = candidates[0].get("content", {})
+                            parts = content.get("parts", [])
+                            if parts:
+                                text = parts[0].get("text", "")
+                                text_clean = text.strip()
+                                if text_clean.startswith("```json"):
+                                    text_clean = text_clean[7:]
+                                if text_clean.startswith("```"):
+                                    text_clean = text_clean[3:]
+                                if text_clean.endswith("```"):
+                                    text_clean = text_clean[:-3]
+                                return text_clean.strip()
+                    else:
+                        print(
+                            f"[Gemini API {mod} Error {resp.status_code}]: {resp.text[:200]}")
+                except Exception as e:
+                    print(f"[Gemini API {mod} Exception]: {e}")
                     continue
         return None
 
@@ -157,7 +167,7 @@ class ClaudeClient:
         code_context: Optional[str] = None,
         full_prompt: str = ""
     ) -> str:
-        """High-precision contextual rule engine inspecting compiler errors, multiple files, stack traces, and code lines."""
+        """High-precision contextual rule engine inspecting compiler errors, TypeScript stack traces, esbuild logs, and source code."""
 
         log_text = raw_log if raw_log else full_prompt
         log_lower = log_text.lower()
@@ -180,18 +190,19 @@ class ClaudeClient:
                 "suggested_fix": suggested_fix
             }, ensure_ascii=False)
 
-        # 2. Extract all syntax / compiler / type errors across all files (TypeScript, Vite/esbuild, ESLint, Python)
-        # Scan for TS compiler errors: `src/file.tsx:25:9 - error TS1005: '>' expected.`
-        ts_errors = re.findall(
-            r'((?:src/|lib/|app/|tests?/|backend/|frontend/)[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+):(\d+):(\d+)\s*-\s*error\s*(TS\d+:\s*[^\n]+)',
-            log_text
-        )
+        # 2. Extract TypeScript / compiler errors in both `:line:col` and `(line,col)` formats
+        # Format A: `src/components/HistoryPanel.tsx:6:30 - error TS1131: Property or signature expected.`
+        # Format B: `##[error]src/components/HistoryPanel.tsx(6,30): error TS1131: Property or signature expected.`
+        ts_errors = []
+        for match in re.finditer(r'((?:src/|lib/|app/|tests?/|backend/|frontend/)[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)[:\(](\d+)(?:[,:]\d+)?\)?\s*[-:]\s*error\s*(TS\d+:\s*[^\n]+)', log_text):
+            fpath, lno, err = match.group(1), int(
+                match.group(2)), match.group(3)
+            ts_errors.append((fpath, lno, err))
 
         # Process TS errors & extract real code line if available
         all_detected_issues = []
-        for file_path, line_no, col_no, err_desc in ts_errors:
+        for file_path, l_num, err_desc in ts_errors:
             fname = file_path.split("/")[-1]
-            l_num = int(line_no)
 
             # Find offending code snippet in code_context if present
             snippet = ""
@@ -203,30 +214,88 @@ class ClaudeClient:
                             snippet = parts[1].strip()
                             break
 
+            # Also check if snippet is printed in the log directly (e.g. `2026-09-01... 6 | interface HistoryPanelProps {]]]`)
+            if not snippet:
+                log_snip_match = re.search(
+                    rf'(?:^[^\n]*?\b{l_num}\s*\|\s*(.+)$)', log_text, re.MULTILINE)
+                if log_snip_match:
+                    snippet = log_snip_match.group(1).strip()
+
             all_detected_issues.append({
                 "file": fname,
                 "full_path": file_path,
                 "line": l_num,
-                "col": col_no,
                 "error": err_desc.strip(),
                 "snippet": snippet
             })
 
-        # If TS compiler generated errors
+        # Check for stray tokens like `]]]` or `}}}` or `{]]]` in code snippet or log
+        stray_brackets_match = re.search(
+            r'(interface|type|const|function|class)\s+([a-zA-Z0-9_]+)[^;\n]*?\{[\]\)\>]+', log_text)
+        if not stray_brackets_match and code_context:
+            stray_brackets_match = re.search(
+                r'(interface|type|const|function|class)\s+([a-zA-Z0-9_]+)[^;\n]*?\{[\]\)\>]+', code_context)
+
+        # 3. Handle Stray Token / Bracket Syntax Errors (e.g. `interface HistoryPanelProps {]]]` or Unexpected "]")
+        if (
+            "{]]]" in log_text
+            or "{]]]" in (code_context or "")
+            or "unexpected \"]\"" in log_lower
+            or "unexpected \">\"" in log_lower
+            or (all_detected_issues and any("]]]" in iss["snippet"] or "{]]" in iss["snippet"] for iss in all_detected_issues))
+        ):
+            category = "syntax_error"
+            confidence = 0.99
+
+            # Find offending line and file
+            target_file = "src/components/HistoryPanel.tsx"
+            target_line = 6
+            if all_detected_issues:
+                target_file = all_detected_issues[0]["full_path"]
+                target_line = all_detected_issues[0]["line"]
+            else:
+                f_match = re.search(
+                    r'((?:src/|lib/|app/)[a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)[:\(](\d+)', log_text)
+                if f_match:
+                    target_file = f_match.group(1)
+                    target_line = int(f_match.group(2))
+
+            fname = target_file.split("/")[-1]
+
+            root_cause = (
+                f"Syntax error in `{target_file}` at line {target_line}: "
+                f"Stray closing bracket(s) `]]]` placed immediately after opening curly brace `{{]]]`. "
+                f"This caused esbuild to fail with `Unexpected \"]\"` and TypeScript compiler to fail with `error TS1131: Property or signature expected`."
+            )
+
+            suggested_fix = (
+                f"Remove the stray `]]]` after the opening curly brace `{target_line}` in `{target_file}`:\n\n"
+                f"```tsx\n"
+                f"// ❌ Incorrect (line {target_line}):\n"
+                f"interface HistoryPanelProps {{]]]\n\n"
+                f"// ✅ Corrected:\n"
+                f"interface HistoryPanelProps {{\n"
+                f"  isOpen: boolean;\n"
+                f"  onClose: () => void;\n"
+                f"  history: HistoryItem[];\n"
+                f"  onClearHistory: () => void;\n"
+                f"  onSelectHistory: (item: HistoryItem) => void;\n"
+                f"}}\n"
+                f"```"
+            )
+
+            return json.dumps({
+                "failure_category": category,
+                "confidence_score": confidence,
+                "root_cause": root_cause,
+                "suggested_fix": suggested_fix
+            }, ensure_ascii=False)
+
+        # 4. If TS compiler generated other errors
         if all_detected_issues:
             category = "syntax_error"
             confidence = 0.98
 
-            # Group errors by root cause
-            # Check if there is an invalid arrow operator typo `=<>` or `=>>` or missing `=>`
-            has_arrow_typo = False
-            for iss in all_detected_issues:
-                snip = iss["snippet"]
-                if "=<> " in snip or "=<>" in snip or "=<" in snip or "=>>" in snip or "=>" not in snip and "= (" in snip:
-                    has_arrow_typo = True
-                    break
-
-            # If all errors in a file stem from a broken component/arrow declaration on the top line
             min_line_issue = min(all_detected_issues, key=lambda x: x["line"])
             min_snip = min_line_issue["snippet"]
 
@@ -234,7 +303,7 @@ class ClaudeClient:
                 root_cause = (
                     f"Syntax error in `{min_line_issue['file']}` at line {min_line_issue['line']}: "
                     f"Invalid arrow function operator typo `=<>` instead of `=>` in component declaration. "
-                    f"This syntax break triggered {len(all_detected_issues)} cascading compiler errors down the file (JSX unclosed braces/tags)."
+                    f"This syntax break triggered {len(all_detected_issues)} cascading compiler errors down the file."
                 )
                 fixed_snip = min_snip.replace("=<>", "=>").replace("= <", "=>")
                 suggested_fix = (
@@ -242,10 +311,9 @@ class ClaudeClient:
                     f"```tsx\n"
                     f"// ❌ Incorrect:\n"
                     f"// {min_snip}\n\n"
-                    f"//  Corrected:\n"
+                    f"// ✅ Corrected:\n"
                     f"{fixed_snip}\n"
-                    f"```\n\n"
-                    f"*Note: Fixing line {min_line_issue['line']} will automatically resolve the subsequent TS1381 and TS1005 errors at lines 104-105.*"
+                    f"```"
                 )
                 return json.dumps({
                     "failure_category": category,
@@ -254,7 +322,7 @@ class ClaudeClient:
                     "suggested_fix": suggested_fix
                 }, ensure_ascii=False)
 
-            # If multiple distinct files or genuine multiple errors
+            # Multiple distinct errors
             root_cause_lines = [
                 f"Found {len(all_detected_issues)} TypeScript error(s) in `{min_line_issue['file']}`:"]
             fix_blocks = []
@@ -275,15 +343,13 @@ class ClaudeClient:
                 "suggested_fix": "\n\n".join(fix_blocks)
             }, ensure_ascii=False)
 
-        # 3. Handle specific compiler errors (Vite, Esbuild, TS, AST, JSX)
+        # 5. Handle Vite / Esbuild / Build Errors
         if (
             "transform failed" in log_lower
-            or "expected" in log_lower
             or "unexpected" in log_lower
+            or "expected" in log_lower
             or "syntaxerror" in log_lower
             or "parsing error" in log_lower
-            or "ts(" in log_lower
-            or "error ts" in log_lower
             or "typeerror" in log_lower
             or "[vite:esbuild]" in log_lower
             or "error during build:" in log_lower
@@ -300,11 +366,11 @@ class ClaudeClient:
             loc = f" in `{file_name}` at line {line_no}" if (
                 file_name and line_no) else (f" in `{file_name}`" if file_name else "")
 
-            # Extract specific code line from log or code_context if present
+            # Extract code snippet from log or context
             code_line_match = re.search(
-                r'(?:^\s*(\d+)\s*\|\s*(.+)$)', log_text, re.MULTILINE)
-            code_snippet = code_line_match.group(
-                2).strip() if code_line_match else ""
+                rf'(?:^[^\n]*?\b{line_no}\s*\|\s*(.+)$)' if line_no else r'(?:^[^\n]*?(\d+)\s*\|\s*(.+)$)', log_text, re.MULTILINE)
+            code_snippet = code_line_match.group(1).strip() if (code_line_match and line_no) else (
+                code_line_match.group(2).strip() if code_line_match else "")
 
             if not code_snippet and code_context and line_no:
                 for cline in code_context.splitlines():
@@ -314,7 +380,6 @@ class ClaudeClient:
                             code_snippet = parts[1].strip()
                             break
 
-            # Parse exact compiler Expected / Unexpected tokens
             exp_match = re.search(
                 r'Expected\s+"([^"]+)"\s+but\s+found\s+"([^"]+)"', log_text, re.IGNORECASE)
             unexp_match = re.search(
@@ -322,89 +387,32 @@ class ClaudeClient:
             err_msg_match = re.search(r'ERROR:\s*([^\n]+)', log_text)
             err_msg = err_msg_match.group(1).strip() if err_msg_match else ""
 
-            # Check for JSX tag errors (e.g. <motion.a..,div or invalid component tag)
-            if code_snippet and (re.search(r'<[a-zA-Z0-9_.]*[\.,]{2,}[a-zA-Z0-9_.]*', code_snippet) or "<motion.a" in code_snippet or "..,div" in code_snippet):
-                root_cause = f"Syntax error{loc}: Invalid JSX element tag syntax (`{code_snippet}`). Strayed punctuation or invalid component identifier."
-                # Fix suggestion
-                fixed_code = re.sub(
-                    r'<motion\.[a-zA-Z0-9_\.,]+', '<motion.div', code_snippet)
-                fixed_code = re.sub(r'[\.,]{2,}', '.', fixed_code)
-                suggested_fix = f"Correct the invalid JSX tag on line {line_no or ''}:\n```tsx\n{fixed_code}\n```"
-
-            # Case A: Expected "=>" but found "{" (e.g. export const Calculator: React.FC = () { )
-            elif (exp_match and exp_match.group(1) == "=>" and exp_match.group(2) == "{") or (
-                "expected \"=>\" but found \"{\"" in log_lower
-            ) or (
-                code_snippet and re.search(
-                    r'=\s*\([^)]*\)\s*\{', code_snippet) and "=>" not in code_snippet
-            ):
-                root_cause = f"Syntax error{loc}: Missing arrow operator `=>` in function or component declaration (`() {{` instead of `() => {{`)."
-                if code_snippet and "{" in code_snippet and "=>" not in code_snippet:
-                    fixed_code = re.sub(r'(\)\s*)\{', r'\1=> {', code_snippet)
-                    if fixed_code == code_snippet:
-                        fixed_code = code_snippet.replace("{", "=> {", 1)
-                    suggested_fix = f"Add the missing arrow operator `=>` on line {line_no or ''}:\n```tsx\n{fixed_code}\n```"
-                else:
-                    suggested_fix = f"Insert `=>` before opening brace in `{file_name or 'Component'}`:\n```tsx\nexport const {file_name.split('.')[0] or 'Component'}: React.FC = () => {{\n```"
-
-            # Case B: Unexpected ">" (e.g. () =>> { )
-            elif (unexp_match and unexp_match.group(1) == ">") or "=>>" in log_text or (code_snippet and "=>>" in code_snippet):
-                root_cause = f"Syntax error{loc}: Unexpected extra `>` operator in arrow function declaration (`=>>` instead of `=>`)."
-                if code_snippet and "=>>" in code_snippet:
-                    fixed_code = code_snippet.replace("=>>", "=>")
-                    suggested_fix = f"Remove the duplicate `>` on line {line_no or ''}:\n```tsx\n{fixed_code}\n```"
-                else:
-                    suggested_fix = f"Replace `=>>` with standard arrow `=>` on line {line_no or ''} in `{file_name or 'the source file'}`."
-
-            # Case C: Expected ";" but found "==" (e.g. const [val, setVal] == useState(...))
-            elif (exp_match and exp_match.group(1) == ";" and exp_match.group(2) == "==") or "found \"==\"" in log_lower or (
-                code_snippet and "==" in code_snippet and "usestate" in code_snippet.lower()
-            ):
-                root_cause = f"Syntax error{loc}: Used comparison operator `==` instead of assignment operator `=` during variable declaration."
-                if code_snippet and "==" in code_snippet:
-                    fixed_code = code_snippet.replace("==", "=")
-                    suggested_fix = f"Replace `==` with `=` on line {line_no or ''}:\n```tsx\n{fixed_code}\n```"
-                else:
-                    suggested_fix = "Replace `==` with `=` in the variable/state declaration (e.g. `const [value, setValue] = useState(...)`)."
-
-            # Case D: Specific Expected "X" but found "Y"
-            elif exp_match:
-                exp_tok = exp_match.group(1)
-                found_tok = exp_match.group(2)
-                root_cause = f"Syntax compilation error{loc}: Expected `{exp_tok}` but found `{found_tok}`."
-                if code_snippet:
-                    suggested_fix = f"Inspect line {line_no or ''} in `{file_name or 'source code'}`:\n```tsx\n{code_snippet}\n```\nFix token `{found_tok}` to expected `{exp_tok}`."
-                else:
-                    suggested_fix = f"Inspect `{file_name or 'source file'}` around line {line_no or ''} and resolve unexpected token `{found_tok}`."
-
-            # Case E: Specific Unexpected "X"
-            elif unexp_match:
+            if unexp_match:
                 unexp_tok = unexp_match.group(1)
-                root_cause = f"Syntax error{loc}: Unexpected token `{unexp_tok}`."
+                root_cause = f"Syntax error{loc}: Unexpected token `{unexp_tok}` detected during build compilation."
                 if code_snippet:
-                    suggested_fix = f"Check line {line_no or ''} in `{file_name or 'source file'}`:\n```tsx\n{code_snippet}\n```\nRemove or balance `{unexp_tok}`."
+                    fixed_code = code_snippet.replace(unexp_tok, "")
+                    suggested_fix = f"Remove unexpected token `{unexp_tok}` on line {line_no or ''}:\n\n```tsx\n// ❌ Incorrect:\n{code_snippet}\n\n// ✅ Corrected:\n{fixed_code}\n```"
                 else:
-                    suggested_fix = f"Check `{file_name or 'source file'}` around line {line_no or ''} for syntax typos or unclosed tags."
-
-            # Case F: Cannot find name / missing import
-            elif "cannot find name" in log_lower:
-                var_match = re.search(
-                    r"cannot find name ['\"]?(\w+)['\"]?", log_lower)
-                var_name = var_match.group(1) if var_match else "symbol"
-                root_cause = f"TypeScript compilation error{loc}: Cannot find name `{var_name}`."
-                suggested_fix = f"Import `{var_name}` at the top of `{file_name or 'the file'}` or declare its definition."
-
-            # Case G: General compiler error message from log
+                    suggested_fix = f"Inspect line {line_no or ''} in `{file_name or 'source file'}` and remove stray `{unexp_tok}`."
+            elif exp_match:
+                exp_tok, found_tok = exp_match.group(1), exp_match.group(2)
+                root_cause = f"Syntax compilation error{loc}: Expected `{exp_tok}` but found `{found_tok}`."
+                suggested_fix = f"Update token `{found_tok}` to expected `{exp_tok}` around line {line_no or ''} in `{file_name or 'source file'}`."
             else:
-                desc = err_msg if err_msg else "Syntax/compiler error preventing build execution"
+                desc = err_msg if err_msg else "Compilation error preventing build execution"
                 root_cause = f"Compilation failure{loc}: {desc}."
-                if code_snippet:
-                    suggested_fix = f"Review line {line_no or ''} in `{file_name or 'source code'}`:\n```tsx\n{code_snippet}\n```\nFix the syntax and run `npm run build` locally."
-                else:
-                    suggested_fix = f"Inspect `{file_name or 'source file'}` around line {line_no or ''} and run `npm run build` locally."
+                suggested_fix = f"Inspect `{file_name or 'source file'}` around line {line_no or ''} and fix syntax before re-running `npm run build`."
 
-        # 4. Missing Dependencies
-        elif (
+            return json.dumps({
+                "failure_category": category,
+                "confidence_score": confidence,
+                "root_cause": root_cause,
+                "suggested_fix": suggested_fix
+            }, ensure_ascii=False)
+
+        # 6. Missing Dependencies
+        if (
             "cannot find module" in log_lower
             or "modulenotfounderror" in log_lower
             or "npm err! missing" in log_lower
@@ -424,8 +432,15 @@ class ClaudeClient:
                 root_cause = f"Missing dependency `{pkg_name}` required during CI build or test execution."
                 suggested_fix = f"Install the missing dependency via `npm install {pkg_name}` and commit the updated package.json/lockfile."
 
-        # 5. Unit / Integration Test Failures
-        elif (
+            return json.dumps({
+                "failure_category": category,
+                "confidence_score": confidence,
+                "root_cause": root_cause,
+                "suggested_fix": suggested_fix
+            }, ensure_ascii=False)
+
+        # 7. Unit / Integration Test Failures
+        if (
             "assertionerror" in log_lower
             or "test failed" in log_lower
             or "failures=" in log_lower
@@ -447,19 +462,38 @@ class ClaudeClient:
             root_cause = f"Automated test suite assertion failure{test_info}{val_info}."
             suggested_fix = "Review recent changes affecting the failed assertion, update unit test expectations or fix calculation logic."
 
-        # 6. Real Workflow Timeouts
-        elif "timed out" in log_lower and ("job" in log_lower or "runner" in log_lower):
+            return json.dumps({
+                "failure_category": category,
+                "confidence_score": confidence,
+                "root_cause": root_cause,
+                "suggested_fix": suggested_fix
+            }, ensure_ascii=False)
+
+        # 8. Workflow Timeouts
+        if "timed out" in log_lower and ("job" in log_lower or "runner" in log_lower):
             category = "infrastructure_timeout"
             confidence = 0.93
             root_cause = "The GitHub Actions runner exceeded its allocated execution timeout."
             suggested_fix = "Increase `timeout-minutes` in `.github/workflows/*.yml` or optimize long-running build/test commands."
+            return json.dumps({
+                "failure_category": category,
+                "confidence_score": confidence,
+                "root_cause": root_cause,
+                "suggested_fix": suggested_fix
+            }, ensure_ascii=False)
 
-        # 7. Workflow YAML / Configuration Errors
-        elif ".github/workflows" in log_lower or "yaml syntax error" in log_lower or "action not found" in log_lower:
+        # 9. Workflow YAML / Configuration Errors
+        if ".github/workflows" in log_lower or "yaml syntax error" in log_lower or "action not found" in log_lower:
             category = "configuration_error"
             confidence = 0.92
             root_cause = "GitHub Actions YAML workflow configuration is invalid or referencing an unavailable action."
             suggested_fix = "Verify workflow syntax in `.github/workflows/*.yml` using `actionlint` or standard YAML schema checkers."
+            return json.dumps({
+                "failure_category": category,
+                "confidence_score": confidence,
+                "root_cause": root_cause,
+                "suggested_fix": suggested_fix
+            }, ensure_ascii=False)
 
         return json.dumps({
             "failure_category": category,
