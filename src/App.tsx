@@ -24,10 +24,19 @@ export default function App() {
     avg_response_time_seconds: 0,
   });
   const [repos, setRepos] = useState<RepositoryConfig[]>([]);
-  const [settings, setSettings] = useState<SystemSettings>({
-    max_log_tokens: 3500,
-    rate_limit_per_min: 60,
-    debug_mode: true,
+  const [settings, setSettings] = useState<SystemSettings>(() => {
+    try {
+      const saved = localStorage.getItem('ci_bot_settings');
+      if (saved) return JSON.parse(saved);
+    } catch { }
+    return {
+      max_log_tokens: 3500,
+      rate_limit_per_min: 60,
+      debug_mode: true,
+      claude_api_key: '',
+      github_token: '',
+      webhook_secret: '',
+    };
   });
 
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -88,10 +97,23 @@ export default function App() {
     try {
       const settingsRes = await axios.get('/api/settings', { timeout: 2500 });
       if (settingsRes.data) {
-        setSettings((prev) => ({
-          ...prev,
-          ...settingsRes.data,
-        }));
+        setSettings((prev) => {
+          const merged = { ...prev, ...settingsRes.data };
+          // If previous setting had an unmasked key and incoming is masked/empty, keep unmasked key
+          if (prev.claude_api_key && (!settingsRes.data.claude_api_key || settingsRes.data.claude_api_key.includes('...'))) {
+            merged.claude_api_key = prev.claude_api_key;
+          }
+          if (prev.github_token && (!settingsRes.data.github_token || settingsRes.data.github_token.includes('...'))) {
+            merged.github_token = prev.github_token;
+          }
+          if (prev.webhook_secret && (!settingsRes.data.webhook_secret || settingsRes.data.webhook_secret.includes('...'))) {
+            merged.webhook_secret = prev.webhook_secret;
+          }
+          try {
+            localStorage.setItem('ci_bot_settings', JSON.stringify(merged));
+          } catch { }
+          return merged;
+        });
       }
     } catch {
       // Keep local settings
@@ -173,15 +195,31 @@ export default function App() {
 
   const handleSaveSettings = async (newSettings: SystemSettings) => {
     try {
+      localStorage.setItem('ci_bot_settings', JSON.stringify(newSettings));
+    } catch { }
+    setSettings(newSettings);
+
+    try {
       const res = await axios.post('/api/settings', newSettings, { timeout: 3000 });
       if (res.data) {
-        setSettings(res.data);
+        setSettings((prev) => {
+          const merged = {
+            ...prev,
+            ...res.data,
+            claude_api_key: newSettings.claude_api_key || prev.claude_api_key || res.data.claude_api_key,
+            github_token: newSettings.github_token || prev.github_token || res.data.github_token,
+            webhook_secret: newSettings.webhook_secret || prev.webhook_secret || res.data.webhook_secret,
+          };
+          try {
+            localStorage.setItem('ci_bot_settings', JSON.stringify(merged));
+          } catch { }
+          return merged;
+        });
         return;
       }
     } catch {
       // Local fallback
     }
-    setSettings(newSettings);
   };
 
   const handlePostComment = async (runId: number) => {

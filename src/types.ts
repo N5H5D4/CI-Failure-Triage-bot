@@ -7,9 +7,14 @@ export interface TriageResult {
   confidence_score: number;
   root_cause?: string | null;
   suggested_fix?: string | null;
+  remediation_steps?: string[];
+  prevention_tip?: string | null;
+  offending_file?: string | null;
+  offending_line?: number | null;
   trimmed_log?: string | null;
   raw_response?: string | null;
-  status: 'pending' | 'posted' | 'error';
+  status: 'pending' | 'posted' | 'error' | 'nothing';
+  bot_action?: string | null;
   is_simulated?: boolean;
   github_comment_url?: string | null;
   created_at?: string;
@@ -30,6 +35,7 @@ export interface RepositoryConfig {
 }
 
 export interface SystemSettings {
+  groq_api_key?: string;
   claude_api_key?: string;
   github_token?: string;
   webhook_secret?: string;

@@ -165,7 +165,7 @@ export const DataTable: React.FC<DataTableProps> = ({
               <th className={theme.tables.th}>Context</th>
               <th className={theme.tables.th}>Diagnosis Category</th>
               <th className={theme.tables.th}>Confidence</th>
-              <th className={theme.tables.th}>Bot Status</th>
+              <th className={theme.tables.th}>Bot Action</th>
               <th className={theme.tables.th}>Time</th>
               <th className={`${theme.tables.th} text-right pr-2 w-24`}>Actions</th>
               <th className="w-10 pr-3"></th>
@@ -278,9 +278,13 @@ export const DataTable: React.FC<DataTableProps> = ({
                       </div>
                     </td>
 
-                    {/* Status */}
+                    {/* Bot Action */}
                     <td className={theme.tables.td}>
-                      {run.status === 'posted' ? (
+                      {isSim || run.bot_action === 'Nothing' || run.status === 'nothing' ? (
+                        <span className="inline-flex items-center space-x-1 text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200 text-[11px] font-medium">
+                          <span>Nothing</span>
+                        </span>
+                      ) : run.status === 'posted' ? (
                         <span className="inline-flex items-center space-x-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 text-[11px] font-medium">
                           <CheckCircle className="w-3 h-3 text-emerald-600" />
                           <span>Commented</span>

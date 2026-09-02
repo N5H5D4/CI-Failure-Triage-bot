@@ -70,6 +70,7 @@ class RepositoryConfigDTO(BaseModel):
 
 
 class SystemSettingsDTO(BaseModel):
+    groq_api_key: Optional[str] = None
     claude_api_key: Optional[str] = None
     github_token: Optional[str] = None
     webhook_secret: Optional[str] = None

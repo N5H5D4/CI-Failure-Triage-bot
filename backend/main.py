@@ -3,12 +3,18 @@ from controllers import webhook, dashboard, repo, settings
 from database import engine, Base
 from sqlalchemy import text
 import os
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Aggressively locate and load .env file
+env_file = find_dotenv(usecwd=True)
+if env_file:
+    load_dotenv(env_file)
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+load_dotenv(Path.cwd() / ".env")
 
 
 # Automatically create all database tables in SQLite/PostgreSQL

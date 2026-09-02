@@ -1,4 +1,5 @@
 # backend/services/triage_service.py
+import os
 import json
 import re
 from datetime import datetime
@@ -213,7 +214,32 @@ class TriageService:
                     files_fetched.add(fpath)
                     print(
                         f"[TriageService] Fetching source code for offending file: {fpath} (at line {lno})")
-                    source_code = await self.github.get_file_content(repo_name, fpath, ref=commit_sha)
+                    source_code = None
+                    # 1. Try reading from GitHub repository via API if configured
+                    if repo_name and not repo_name.startswith("simulated"):
+                        source_code = await self.github.get_file_content(repo_name, fpath, ref=commit_sha)
+
+                    # 2. Fallback: If running simulator or file exists in current workspace, read directly from disk
+                    if not source_code:
+                        clean_rel_path = fpath.lstrip("/")
+                        possible_local_paths = [
+                            clean_rel_path,
+                            os.path.join(os.getcwd(), clean_rel_path),
+                            os.path.join(os.getcwd(), "src",
+                                         clean_rel_path.replace("src/", "", 1)),
+                        ]
+                        for lp in possible_local_paths:
+                            if os.path.isfile(lp):
+                                try:
+                                    with open(lp, "r", encoding="utf-8", errors="replace") as lf:
+                                        source_code = lf.read()
+                                        print(
+                                            f"[TriageService] Successfully read source code from local workspace: {lp}")
+                                        break
+                                except Exception as fe:
+                                    print(
+                                        f"[TriageService] Local read exception for {lp}: {fe}")
+
                     if source_code:
                         if lno:
                             code_win = self._build_code_window(
@@ -304,13 +330,21 @@ class TriageService:
             return result_record
 
         except Exception as e:
-            if db:
-                db.rollback()
             print(f"[TriageService Error in run #{run_id}]: {str(e)}")
-            if result_record:
-                result_record.status = "error"
-                result_record.root_cause = f"System triage exception: {str(e)}"
-                db.commit()
+            try:
+                # Open fresh session to save error status reliably
+                with SessionLocal() as err_db:
+                    rec = err_db.query(TriageResult).filter_by(
+                        repo_name=repo_name, run_id=run_id).first()
+                    if rec:
+                        rec.status = "error"
+                        rec.failure_category = rec.failure_category if rec.failure_category and rec.failure_category != "unknown" else "syntax_error"
+                        rec.root_cause = rec.root_cause or f"Triage encountered an issue: {str(e)}"
+                        rec.suggested_fix = rec.suggested_fix or "Inspect raw GitHub Actions workflow logs or trigger a re-run."
+                        err_db.commit()
+            except Exception as dbe:
+                print(f"[Failed to update error status in DB]: {dbe}")
             raise e
         finally:
-            db.close()
+            if db:
+                db.close()

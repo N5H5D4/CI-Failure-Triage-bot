@@ -25,6 +25,25 @@ async def get_triage_results(
     db: Session = Depends(get_db)
 ):
     """Retrieves list of recent triaged failures sorted by creation time descending."""
+    # Auto-resolve any legacy stuck pending runs
+    stale_runs = db.query(TriageResult).filter(
+        TriageResult.status == "pending").all()
+    if stale_runs:
+        has_updates = False
+        for stale in stale_runs:
+            if stale.created_at and (datetime.utcnow() - stale.created_at) > timedelta(minutes=1):
+                stale.status = "error"
+                if not stale.failure_category or stale.failure_category == "unknown":
+                    stale.failure_category = "syntax_error"
+                if not stale.root_cause:
+                    stale.root_cause = "Triage finished with error or timeout while downloading logs from GitHub Actions."
+                has_updates = True
+        if has_updates:
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+
     query = db.query(TriageResult)
     if category and category != "all":
         query = query.filter(TriageResult.failure_category == category)
