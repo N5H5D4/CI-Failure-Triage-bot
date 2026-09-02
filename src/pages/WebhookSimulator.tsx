@@ -12,6 +12,9 @@ import {
   Trash2,
   FolderGit2,
   Bot,
+  CheckCircle2,
+  XCircle,
+  Cpu,
 } from 'lucide-react';
 import { TriageResult, RepositoryConfig } from '../types';
 import { theme } from '../styles/theme';
@@ -43,6 +46,60 @@ export const WebhookSimulator: React.FC<WebhookSimulatorProps> = ({
   const [isSimulating, setIsSimulating] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Model active / inactive status state
+  const [modelStatus, setModelStatus] = useState<{
+    groq_configured: boolean;
+    claude_configured: boolean;
+    active_primary: string;
+  }>({
+    groq_configured: false,
+    claude_configured: false,
+    active_primary: 'Heuristic Engine',
+  });
+
+  useEffect(() => {
+    // Fetch system health / settings to check model active states
+    const fetchModelStatus = async () => {
+      try {
+        const res = await axios.get('/api/health');
+        if (res.data) {
+          const groq = Boolean(res.data.groq_configured);
+          const claude = Boolean(res.data.claude_configured);
+          let primary = 'Heuristic Engine';
+          if (groq) primary = 'Groq (qwen/qwen3.6-27b)';
+          else if (claude) primary = 'Claude 3.5 Sonnet';
+
+          setModelStatus({
+            groq_configured: groq,
+            claude_configured: claude,
+            active_primary: primary,
+          });
+        }
+      } catch {
+        // Fallback: check localStorage
+        try {
+          const saved = localStorage.getItem('ci_bot_settings');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            const groq = Boolean(parsed.groq_api_key);
+            const claude = Boolean(parsed.claude_api_key);
+            let primary = 'Heuristic Engine';
+            if (groq) primary = 'Groq (qwen/qwen3.6-27b)';
+            else if (claude) primary = 'Claude 3.5 Sonnet';
+
+            setModelStatus({
+              groq_configured: groq,
+              claude_configured: claude,
+              active_primary: primary,
+            });
+          }
+        } catch { }
+      }
+    };
+
+    fetchModelStatus();
+  }, []);
+
   useEffect(() => {
     if (repos.length > 0 && selectedRepoMode !== 'custom') {
       const active = repos.find((r) => r.is_active) || repos[0];
@@ -72,9 +129,9 @@ export const WebhookSimulator: React.FC<WebhookSimulatorProps> = ({
 
     try {
       setTimeout(() => setStep(2), 350); // Trimming log window
-      setTimeout(() => setStep(3), 700); // Claude AI Dynamic Reasoning
+      setTimeout(() => setStep(3), 700); // AI Dynamic Reasoning
 
-      // Call backend Claude AI endpoint
+      // Call backend triage endpoint
       const res = await axios.post(
         '/api/simulate-triage',
         {
@@ -128,13 +185,40 @@ export const WebhookSimulator: React.FC<WebhookSimulatorProps> = ({
             <span>CI/CD Webhook & Log Ingestion Simulator</span>
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 mt-1">
-            Dispatch runner logs to the <strong>Groq AI</strong> diagnostic engine with automatic fallback.
+            Dispatch runner logs to the active AI diagnostic engine with automated failure analysis.
           </p>
         </div>
 
-        <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-xs font-semibold self-start sm:self-auto">
-          <Bot className="w-4 h-4 text-blue-600" />
-          <span>Groq AI Active</span>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Groq Model Status */}
+          <div
+            className={`inline-flex items-center space-x-1.5 px-3 py-1 rounded-lg text-xs font-semibold border ${modelStatus.groq_configured
+              ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+              : 'bg-slate-100 border-slate-200 text-slate-500'
+              }`}
+          >
+            {modelStatus.groq_configured ? (
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+            ) : (
+              <XCircle className="w-3.5 h-3.5 text-slate-400" />
+            )}
+            <span>Groq (qwen3.6-27b): {modelStatus.groq_configured ? 'ACTIVE (Primary)' : 'Inactive'}</span>
+          </div>
+
+          {/* Claude Model Status */}
+          <div
+            className={`inline-flex items-center space-x-1.5 px-3 py-1 rounded-lg text-xs font-semibold border ${modelStatus.claude_configured
+              ? 'bg-blue-50 border-blue-300 text-blue-800'
+              : 'bg-slate-100 border-slate-200 text-slate-500'
+              }`}
+          >
+            {modelStatus.claude_configured ? (
+              <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />
+            ) : (
+              <XCircle className="w-3.5 h-3.5 text-slate-400" />
+            )}
+            <span>Claude 3.5 Sonnet: {modelStatus.claude_configured ? (modelStatus.groq_configured ? 'ACTIVE (Secondary)' : 'ACTIVE (Primary)') : 'Inactive'}</span>
+          </div>
         </div>
       </div>
 
@@ -292,6 +376,101 @@ export const WebhookSimulator: React.FC<WebhookSimulatorProps> = ({
           </div>
         </div>
 
+        {/* Quick Sample Presets for HistoryPanel.tsx & CI tests */}
+        <div className="flex flex-wrap items-center gap-1.5 py-1">
+          <span className="text-[11px] font-semibold text-slate-500 mr-1">Log mẫu HistoryPanel:</span>
+          <button
+            type="button"
+            onClick={() => setCustomLog(`[CI Run #8921] Running: npm run build
+> react-calculator@1.0.0 build
+> tsc && vite build
+
+src/components/HistoryPanel.tsx:2:29 - error TS2307: Cannot find module '../types' or its corresponding type declarations.
+
+2 import { HistoryItem } from '../types';
+                              ~~~~~~~~~~
+
+src/components/HistoryPanel.tsx:75:32 - error TS2339: Property 'expression' does not exist on type 'HistoryItem'.
+
+75 <span className="font-mono">{item.expression}</span>
+                                      ~~~~~~~~~~
+
+src/components/HistoryPanel.tsx:78:33 - error TS2339: Property 'result' does not exist on type 'HistoryItem'.
+
+78 = {item.result}
+           ~~~~~~
+
+Found 3 errors in src/components/HistoryPanel.tsx
+Error: Process completed with exit code 2.`)}
+            className="px-2.5 py-1 text-[11px] bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300 border border-slate-200 rounded-md font-medium text-slate-700 transition-colors cursor-pointer"
+          >
+            1. TS Missing Type / Field
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setCustomLog(`[CI Workflow #9042] Running: npm test -- --coverage
+> jest --coverage --ci
+
+FAIL src/components/__tests__/HistoryPanel.test.tsx
+  ● HistoryPanel Component › should render calculation history and trigger selection
+
+    TypeError: onSelectHistory is not a function
+
+      71 |                     id={\`history-item-\${item.id}\`}
+      72 |                     onClick={() => {
+    > 73 |                       onSelectHistory(item);
+         |                       ^
+      74 |                       onClose();
+      75 |                     }}
+      76 |                     className="w-full text-right p-3.5 rounded-2xl bg-neutral-800/40"
+
+      at onClick (src/components/HistoryPanel.tsx:73:23)
+      at HTMLUnknownElement.callCallback (node_modules/react-dom/cjs/react-dom.development.js:4164:14)
+      at Object.invokeGuardedCallbackDev (node_modules/react-dom/cjs/react-dom.development.js:4213:16)
+      at invokeGuardedCallback (node_modules/react-dom/cjs/react-dom.development.js:4277:31)
+      at fireEvent (node_modules/@testing-library/dom/dist/events.js:16:11)
+      at Object.<anonymous> (src/components/__tests__/HistoryPanel.test.tsx:48:5)
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 4 passed, 5 total
+Snapshots:   0 total
+Time:        3.412 s
+Error: Process completed with exit code 1.`)}
+            className="px-2.5 py-1 text-[11px] bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300 border border-slate-200 rounded-md font-medium text-slate-700 transition-colors cursor-pointer"
+          >
+            2. Jest Unit Test TypeError
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setCustomLog(`[CI Run #9103] Running: npm run build
+> vite build
+
+vite v5.4.2 building for production...
+transforming...
+✓ 48 modules transformed.
+x Build failed with 1 error:
+node_modules/motion/react/index.mjs:1:0: ERROR: Could not resolve "motion/react" (mark it as external or add package to dependencies)
+
+[vite]: Rollup failed to resolve import "motion/react" from "src/components/HistoryPanel.tsx".
+This is most likely not an issue with Vite itself, but with the package configuration or peer dependencies.
+
+src/components/HistoryPanel.tsx:4:39:
+4 | import { motion, AnimatePresence } from 'motion/react';
+  |                                        ^
+
+error during build:
+Error: Rollup failed to resolve import "motion/react" from "src/components/HistoryPanel.tsx".
+    at error (file:///home/runner/work/calc-app/node_modules/rollup/dist/es/shared/parseAst.js:337:30)
+    at ModuleLoader.handleInvalidResolvedId (file:///home/runner/work/calc-app/node_modules/rollup/dist/es/shared/node-entry.js:19149:24)
+Error: Process completed with exit code 1.`)}
+            className="px-2.5 py-1 text-[11px] bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300 border border-slate-200 rounded-md font-medium text-slate-700 transition-colors cursor-pointer"
+          >
+            3. Vite Rollup Dependency Error
+          </button>
+        </div>
+
         <div className="relative">
           <textarea
             rows={13}
@@ -314,7 +493,7 @@ export const WebhookSimulator: React.FC<WebhookSimulatorProps> = ({
           <div className="flex items-center space-x-2 text-xs text-slate-500">
             <Sparkles className="w-4 h-4 text-emerald-600" />
             <span>
-              Log Ingestion &gt; Dynamic Context Trimmer &gt; Claude AI Failure Reasoning
+              Log Ingestion &gt; Dynamic Context Trimmer &gt; {modelStatus.active_primary}
             </span>
           </div>
 
@@ -331,7 +510,7 @@ export const WebhookSimulator: React.FC<WebhookSimulatorProps> = ({
                 <span>
                   {step === 1 && 'Ingesting CI Log Payload...'}
                   {step === 2 && 'Trimming Noise & Isolating Fault...'}
-                  {step === 3 && 'Claude AI Diagnosing Root Cause...'}
+                  {step === 3 && `${modelStatus.active_primary} Diagnosing Root Cause...`}
                   {step >= 4 && 'Synthesizing Actionable Triage...'}
                 </span>
               </>

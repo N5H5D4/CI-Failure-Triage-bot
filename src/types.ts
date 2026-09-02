@@ -17,6 +17,7 @@ export interface TriageResult {
   bot_action?: string | null;
   is_simulated?: boolean;
   github_comment_url?: string | null;
+  engine_used?: string | null;
   created_at?: string;
 }
 

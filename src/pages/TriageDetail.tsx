@@ -259,7 +259,9 @@ export const TriageDetail: React.FC<TriageDetailProps> = ({
             <div className="flex items-center space-x-2 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg shadow-xs">
               <Sparkles className="w-4 h-4 text-emerald-600" />
               <div className="text-xs">
-                <span className="text-emerald-800 font-medium">Claude Confidence: </span>
+                <span className="text-emerald-800 font-medium">
+                  {run.engine_used || 'AI'} Confidence:{' '}
+                </span>
                 <span className="font-mono font-bold text-emerald-950">
                   {confidencePercent}%
                 </span>

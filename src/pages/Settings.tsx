@@ -93,7 +93,7 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
           err.message ||
           'Unable to connect to Anthropic API to verify API key.',
         fallback_available: true,
-        fallback_engine: 'Groq (llama-3.3-70b-versatile)',
+        fallback_engine: 'Groq (qwen/qwen3.6-27b)',
       });
     } finally {
       setIsTestingClaude(false);
@@ -250,9 +250,8 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
             <div className="p-3.5 bg-slate-50 rounded-lg border border-slate-200 space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
-                  <Cpu className="w-4 h-4 text-blue-600" />
                   <label htmlFor="groq-key-input" className="text-slate-800 font-semibold block">
-                    Groq AI Engine (llama-3.3-70b-versatile)
+                    Groq AI Engine (qwen/qwen3.6-27b)
                   </label>
                   {formData.groq_api_key ? (
                     <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
@@ -302,7 +301,7 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
                 <input
                   id="groq-key-input"
                   type={showGroqKey ? 'text' : 'password'}
-                  placeholder="Mặc định lấy GROQ_API_KEY từ file .env (hoặc dán gsk_... để ghi đè)"
+                  placeholder="Enter and save to apply changes."
                   value={formData.groq_api_key || ''}
                   onChange={(e) => {
                     setFormData({ ...formData, groq_api_key: e.target.value });
@@ -324,10 +323,6 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
                 </button>
               </div>
 
-              <p className="text-[11px] text-slate-600 leading-relaxed">
-                Động cơ AI chính sử dụng mô hình <strong>Groq (llama-3.3-70b-versatile)</strong> với tốc độ suy luận siêu tốc độ và khả năng phân tích lỗi CI/CD chính xác cao. Hoàn toàn miễn phí key tại <strong><a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" className="underline font-semibold text-blue-700">console.groq.com/keys</a></strong>.
-              </p>
-
               {groqTestResult && (
                 <div
                   className={`p-2.5 rounded-lg border text-xs flex items-start space-x-2 ${groqTestResult.valid
@@ -342,7 +337,7 @@ export const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
                   )}
                   <div className="space-y-0.5 flex-1">
                     <div className="font-semibold">
-                      {groqTestResult.valid ? 'Groq AI Engine Online (llama-3.3-70b-versatile)' : 'Groq Engine Check Failed'}
+                      {groqTestResult.valid ? `Groq AI Engine Online (${groqTestResult.model || 'qwen/qwen3.6-27b'})` : 'Groq Engine Check Failed'}
                     </div>
                     <div className="text-[11px] opacity-90 leading-relaxed">{groqTestResult.message}</div>
                   </div>

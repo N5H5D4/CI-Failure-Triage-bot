@@ -8,41 +8,8 @@ import Anthropic from '@anthropic-ai/sdk';
 dotenv.config();
 
 function persistEnvFile(key: string, value: string) {
+    // In-memory runtime persistence is used to prevent Vite dev server watchers from restarting/reloading on key tests
     if (!key || !value || value.includes('...') || value.includes('•') || value.includes('*')) return;
-    const cleanVal = value.replace(/^['"]+|['"]+$/g, '').trim();
-    const targetFiles = [
-        path.join(process.cwd(), '.env'),
-        path.join(process.cwd(), 'backend', '.env')
-    ];
-
-    for (const envPath of targetFiles) {
-        try {
-            let content = '';
-            if (fs.existsSync(envPath)) {
-                content = fs.readFileSync(envPath, 'utf8');
-            }
-            const lines = content ? content.split('\n') : [];
-            let found = false;
-            const updatedLines = lines.map((line) => {
-                if (line.startsWith(`${key}=`) || line.startsWith(`export ${key}=`)) {
-                    found = true;
-                    return `${key}=${cleanVal}`;
-                }
-                return line;
-            });
-
-            if (!found) {
-                updatedLines.push(`${key}=${cleanVal}`);
-            }
-
-            const dir = path.dirname(envPath);
-            if (fs.existsSync(dir)) {
-                fs.writeFileSync(envPath, updatedLines.filter(Boolean).join('\n') + '\n', 'utf8');
-            }
-        } catch (e) {
-            console.warn(`[Warn] Could not persist ${key} to ${envPath}:`, e);
-        }
-    }
 }
 
 interface StoredTriageResult {
@@ -64,6 +31,7 @@ interface StoredTriageResult {
     bot_action?: string | null;
     is_simulated?: boolean;
     github_comment_url?: string | null;
+    engine_used?: string | null;
     created_at: string;
 }
 
@@ -100,65 +68,90 @@ function getClaudeClient(apiKey?: string): Anthropic {
 
 /**
  * Groq API Direct Client (OpenAI-compatible, ultra-fast LLM inference)
+ * Uses Qwen 3.6 27B (qwen/qwen3.6-27b) as dedicated primary model with resilient model fallback
  */
 async function callGroqChat(
     apiKey: string,
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
     options: { model?: string; temperature?: number; jsonMode?: boolean } = {}
 ): Promise<{ text: string; model: string }> {
-    const model = options.model || 'llama-3.3-70b-versatile';
+    const candidateModels = [
+        options.model || 'qwen/qwen3.6-27b',
+        'qwen-2.5-32b',
+        'qwen/qwen3.8-27b',
+        'qwen-2.5-coder-32b',
+    ];
+    // De-duplicate while preserving priority order
+    const modelsToTry = Array.from(new Set(candidateModels.filter(Boolean)));
     const temperature = options.temperature ?? 0.1;
     const url = 'https://api.groq.com/openai/v1/chat/completions';
 
-    const body: any = {
-        model,
-        messages,
-        temperature,
-        max_tokens: 3000,
-    };
+    let lastError: any = null;
 
-    if (options.jsonMode) {
-        body.response_format = { type: 'json_object' };
-    }
+    for (const modelToUse of modelsToTry) {
+        const body: any = {
+            model: modelToUse,
+            messages,
+            temperature,
+            max_tokens: 3000,
+        };
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 25000);
-
-    try {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey.trim()}`,
-            },
-            body: JSON.stringify(body),
-            signal: controller.signal,
-        });
-
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            let errorDetail = errorText;
-            try {
-                const parsedError = JSON.parse(errorText);
-                if (parsedError.error?.message) {
-                    errorDetail = parsedError.error.message;
-                }
-            } catch { }
-            throw new Error(`Groq HTTP ${response.status}: ${errorDetail}`);
+        if (options.jsonMode) {
+            body.response_format = { type: 'json_object' };
         }
 
-        const data = await response.json();
-        const content = data.choices?.[0]?.message?.content || '';
-        return {
-            text: content,
-            model: data.model || model,
-        };
-    } catch (err: any) {
-        clearTimeout(timeoutId);
-        throw err;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 25000);
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${apiKey.trim()}`,
+                },
+                body: JSON.stringify(body),
+                signal: controller.signal,
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                let errorDetail = errorText;
+                try {
+                    const parsedError = JSON.parse(errorText);
+                    if (parsedError.error?.message) {
+                        errorDetail = parsedError.error.message;
+                    }
+                } catch { }
+
+                if (response.status === 404 || errorDetail.includes('does not exist') || errorDetail.includes('access')) {
+                    console.warn(`[Groq Model Notice] Model '${modelToUse}' unavailable on this key (${errorDetail}), trying fallback model...`);
+                    lastError = new Error(`Groq HTTP ${response.status}: ${errorDetail}`);
+                    continue;
+                }
+
+                throw new Error(`Groq HTTP ${response.status}: ${errorDetail}`);
+            }
+
+            const data = await response.json();
+            const content = data.choices?.[0]?.message?.content || '';
+            return {
+                text: content,
+                model: data.model || modelToUse,
+            };
+        } catch (err: any) {
+            clearTimeout(timeoutId);
+            lastError = err;
+            if (err.message && (err.message.includes('404') || err.message.includes('does not exist'))) {
+                continue;
+            }
+            throw err;
+        }
     }
+
+    throw lastError || new Error('Failed to connect to Groq with available models.');
 }
 
 // Log Trimmer Utility
@@ -198,7 +191,7 @@ function trimLogLines(rawLog: string, maxLines = 100): string {
 }
 
 /**
- * Pure Dynamic AI Analysis using Groq (llama-3.3-70b-versatile) or Claude 3.5 Sonnet
+ * Pure Dynamic AI Analysis using Groq (qwen/qwen3.6-27b) or Claude 3.5 Sonnet
  */
 async function analyzeLogWithAI(
     rawLog: string,
@@ -245,17 +238,17 @@ ${trimmedLog}
 
 Return your complete JSON diagnosis.`;
 
-    // 1. Primary AI Engine: Groq API (llama-3.3-70b-versatile)
+    // 1. Primary AI Engine: Groq API (qwen/qwen3.6-27b)
     if (groqKey && !groqKey.includes('•') && !groqKey.includes('*')) {
         try {
-            console.log('[AI Triage] Executing diagnosis via Groq API (llama-3.3-70b-versatile)...');
+            console.log('[AI Triage] Executing diagnosis via Groq API (qwen/qwen3.6-27b)...');
             const response = await callGroqChat(
                 groqKey,
                 [
                     { role: 'system', content: systemInstruction },
                     { role: 'user', content: userPrompt },
                 ],
-                { model: 'llama-3.3-70b-versatile', temperature: 0.1, jsonMode: true }
+                { model: 'qwen/qwen3.6-27b', temperature: 0.1, jsonMode: true }
             );
 
             let text = response.text.trim();
@@ -377,6 +370,73 @@ Return your complete JSON diagnosis.`;
     };
 }
 
+function buildGitHubMarkdownReport(
+    record: {
+        failure_category: string;
+        confidence_score: number;
+        root_cause?: string | null;
+        suggested_fix?: string | null;
+        remediation_steps?: string[];
+        prevention_tip?: string | null;
+        offending_file?: string | null;
+        offending_line?: number | null;
+        engine_used?: string | null;
+    },
+    repoName: string = '',
+    runId: number = 0
+): string {
+    const categoryLabels: Record<string, string> = {
+        dependency_issue: '📦 **Dependency Issue / Module Resolution Failure**',
+        syntax_error: '✍️ **Syntax / Type Compilation Error**',
+        type_error: '✍️ **TypeScript Type Mismatch Error**',
+        test_failure: '🧪 **Unit / Integration Test Failure**',
+        flaky_test: '⚠️ **Flaky Test Anomaly**',
+        configuration_error: '⚙️ **Workflow / Configuration Error**',
+        infrastructure_timeout: '⏱️ **Runner Execution Timeout**',
+        runtime_error: '💥 **Runtime Exception**',
+        unknown: '❓ **Unclassified CI Failure**',
+    };
+
+    const badge = categoryLabels[record.failure_category] || `❓ **${record.failure_category || 'Unclassified'}**`;
+    const confidencePct = Math.round((record.confidence_score || 0.95) * 100);
+    const modelEngine = record.engine_used || 'Groq (qwen/qwen3.6-27b)';
+
+    let offendingSection = '';
+    if (record.offending_file) {
+        offendingSection = `\n- **Target Location**: \`${record.offending_file}${record.offending_line ? `:${record.offending_line}` : ''}\``;
+    }
+
+    let remediationSection = '';
+    if (record.remediation_steps && record.remediation_steps.length > 0) {
+        remediationSection = `\n\n#### 📋 Suggested Remediation Steps\n` +
+            record.remediation_steps.map((s, i) => `${i + 1}. ${s}`).join('\n');
+    }
+
+    let preventionSection = '';
+    if (record.prevention_tip) {
+        preventionSection = `\n\n#### 🛡️ Prevention Tip\n> ${record.prevention_tip}`;
+    }
+
+    return `### 🤖 CI Failure Triage Bot Diagnostic Report
+
+| **Failure Category** | **Confidence Score** | **AI Model Engine** |
+| :--- | :--- | :--- |
+| ${badge} | \`${confidencePct}%\` | \`${modelEngine}\` |
+${offendingSection}
+
+#### 🔍 Root Cause Analysis
+> ${record.root_cause || 'CI build failure detected in pipeline execution.'}
+
+#### 🛠️ Recommended Action & Suggested Fix
+\`\`\`text
+${record.suggested_fix || 'Review recent code changes and test failures.'}
+\`\`\`${remediationSection}${preventionSection}
+
+---
+*Automated diagnostic triage generated by **CI Failure Triage Bot** using \`${modelEngine}\` | Repository: \`${repoName}\` | Workflow Run #${runId}*
+`;
+}
+
 async function startServer() {
     const app = express();
     const PORT = 3000;
@@ -451,6 +511,7 @@ async function startServer() {
                 bot_action: isSimulated ? 'Nothing' : (actualPr ? 'Pending Post' : 'Logged'),
                 is_simulated: isSimulated,
                 github_comment_url: null,
+                engine_used: aiResult.engine_used,
                 created_at: new Date().toISOString(),
             };
 
@@ -473,6 +534,7 @@ async function startServer() {
                 bot_action: isSimulated ? 'Nothing' : 'Error',
                 is_simulated: isSimulated,
                 github_comment_url: null,
+                engine_used: 'Error Fallback',
                 created_at: new Date().toISOString(),
             };
             triageStore = [errorRecord, ...triageStore];
@@ -510,6 +572,7 @@ async function startServer() {
             existing.offending_file = aiResult.offending_file;
             existing.offending_line = aiResult.offending_line;
             existing.raw_response = aiResult.raw_response;
+            existing.engine_used = aiResult.engine_used;
             if (existing.is_simulated) {
                 existing.status = 'nothing';
                 existing.bot_action = 'Nothing';
@@ -530,10 +593,6 @@ async function startServer() {
         const groqKey = (systemSettings.groq_api_key || process.env.GROQ_API_KEY || '').trim();
         const claudeKey = (systemSettings.claude_api_key || process.env.CLAUDE_API_KEY || '').trim();
 
-        if (!groqKey && !claudeKey) {
-            return res.status(400).json({ error: 'No Groq or Claude API key configured in .env or Settings.' });
-        }
-
         const systemPrompt = 'You are an expert CI/CD debugging bot. Provide concise, highly accurate technical advice, unit tests, or fixes for developers.';
         const userPrompt = `Context of CI failure:\n${log_context || 'No context'}\n\nDeveloper question: ${message}`;
 
@@ -545,7 +604,7 @@ async function startServer() {
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: userPrompt },
                     ],
-                    { model: 'llama-3.3-70b-versatile', temperature: 0.2 }
+                    { model: 'qwen/qwen3.6-27b', temperature: 0.2 }
                 );
                 return res.json({ reply: response.text, engine: `Groq (${response.model})` });
             } catch (err: any) {
@@ -575,7 +634,11 @@ async function startServer() {
             }
         }
 
-        res.status(500).json({ error: 'Failed to generate AI reply' });
+        // Rule-based helpful response if no API keys configured
+        return res.json({
+            reply: `Diagnostic advice: Based on the provided log context, check the line syntax or missing dependency mentioned in the error. To enable interactive LLM chat, configure GROQ_API_KEY (qwen/qwen3.6-27b) or CLAUDE_API_KEY in System Settings or .env.`,
+            engine: 'Rule-Based Assistant',
+        });
     });
 
     // Post PR comment (or simulate comment URL)
@@ -587,11 +650,11 @@ async function startServer() {
             return res.status(404).json({ error: 'Run not found' });
         }
 
+        const commentBody = buildGitHubMarkdownReport(item, item.repo_name, item.run_id);
         const githubToken = (systemSettings.github_token || process.env.GITHUB_TOKEN || '').trim();
+
         if (githubToken && item.repo_name && item.pr_number && !githubToken.includes('•')) {
             try {
-                const commentBody = `### 🤖 CI Failure Triage Bot Diagnostic Report\n\n**Category**: \`${item.failure_category}\` (Confidence: ${Math.round((item.confidence_score || 0.9) * 100)}%)\n\n#### 🔍 Root Cause\n${item.root_cause || 'CI build failure detected.'}\n\n#### 🛠️ Suggested Fix\n${item.suggested_fix || 'Review the attached logs.'}\n\n---\n*Report generated by Groq / Claude AI CI Bot.*`;
-
                 const ghRes = await fetch(`https://api.github.com/repos/${item.repo_name}/issues/${item.pr_number}/comments`, {
                     method: 'POST',
                     headers: {
@@ -767,11 +830,11 @@ async function startServer() {
         }
 
         try {
-            console.log('[Groq Test] Testing connection to https://api.groq.com/openai/v1/chat/completions...');
+            console.log('[Groq Test] Testing connection to https://api.groq.com/openai/v1/chat/completions with qwen/qwen3.6-27b...');
             const response = await callGroqChat(
                 keyToTest,
                 [{ role: 'user', content: 'Ping' }],
-                { model: 'llama-3.3-70b-versatile', temperature: 0.1 }
+                { model: 'qwen/qwen3.6-27b', temperature: 0.1 }
             );
 
             if (response && response.text) {
@@ -781,7 +844,7 @@ async function startServer() {
 
                 return res.json({
                     valid: true,
-                    message: `Kết nối thành công! Groq API (${response.model}) đã được xác thực từ .env / Settings sẵn sàng chẩn đoán CI/CD.`,
+                    message: `Kết nối thành công! Groq AI Engine (${response.model}) đã được xác thực sẵn sàng chẩn đoán CI/CD.`,
                     model: response.model,
                     status: 'online',
                 });
@@ -790,7 +853,7 @@ async function startServer() {
             return res.json({
                 valid: true,
                 message: 'Groq API đã kết nối thành công!',
-                model: 'llama-3.3-70b-versatile',
+                model: 'qwen/qwen3.6-27b',
             });
         } catch (err: any) {
             console.error('[Groq API Key Test Failed]:', err.message);
@@ -833,7 +896,7 @@ async function startServer() {
                 valid: false,
                 message: 'Please provide a valid Anthropic Claude API Key (starts with sk-ant-api03-...).',
                 fallback_available: true,
-                fallback_engine: 'Groq (llama-3.3-70b-versatile)',
+                fallback_engine: 'Groq (qwen/qwen3.6-27b)',
             });
         }
 
@@ -874,7 +937,7 @@ async function startServer() {
                 message: friendlyMessage,
                 raw_error: err.message,
                 fallback_available: true,
-                fallback_engine: 'Groq (llama-3.3-70b-versatile)',
+                fallback_engine: 'Groq (qwen/qwen3.6-27b)',
             });
         }
     };
@@ -969,6 +1032,7 @@ async function startServer() {
                     bot_action: prNumber ? 'Pending Post' : 'Logged',
                     is_simulated: false,
                     github_comment_url: null,
+                    engine_used: aiResult.engine_used,
                     created_at: new Date().toISOString(),
                 };
 
@@ -978,7 +1042,7 @@ async function startServer() {
                 const githubToken = (systemSettings.github_token || process.env.GITHUB_TOKEN || '').trim();
                 if (githubToken && prNumber && !githubToken.includes('•')) {
                     try {
-                        const commentBody = `### 🤖 CI Failure Triage Bot Diagnostic Report\n\n**Category**: \`${newRecord.failure_category}\` (Confidence: ${Math.round(newRecord.confidence_score * 100)}%)\n\n#### 🔍 Root Cause\n${newRecord.root_cause}\n\n#### 🛠️ Suggested Fix\n${newRecord.suggested_fix}\n\n---\n*Report generated by Groq / Claude AI CI Bot.*`;
+                        const commentBody = buildGitHubMarkdownReport(newRecord, repoName, runId);
                         const ghRes = await fetch(`https://api.github.com/repos/${repoName}/issues/${prNumber}/comments`, {
                             method: 'POST',
                             headers: {

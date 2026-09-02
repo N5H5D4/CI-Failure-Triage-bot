@@ -11,7 +11,7 @@ class ClaudeClient:
     def __init__(
         self,
         claude_api_key: Optional[str] = None,
-        model: str = "llama-3.3-70b-versatile"
+        model: str = "qwen/qwen3.6-27b"
     ):
         self.claude_api_key = claude_api_key
         self.model = model
@@ -34,41 +34,50 @@ class ClaudeClient:
         groq_key = self._get_groq_key()
         claude_key = self._get_claude_key()
 
-        # 1. Primary AI Engine: Groq API (llama-3.3-70b-versatile)
+        # 1. Primary AI Engine: Groq API (qwen/qwen3.6-27b)
         if groq_key:
             try:
                 timeout_cfg = httpx.Timeout(
                     connect=10.0, read=30.0, write=10.0, pool=10.0)
                 async with httpx.AsyncClient(timeout=timeout_cfg) as client:
-                    resp = await client.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers={
-                            "Content-Type": "application/json",
-                            "Authorization": f"Bearer {groq_key.strip()}",
-                        },
-                        json={
-                            "model": "llama-3.3-70b-versatile",
-                            "messages": [
-                                {"role": "system", "content": system_prompt},
-                                {"role": "user", "content": user_prompt}
-                            ],
-                            "temperature": 0.1,
-                            "response_format": {"type": "json_object"}
-                        }
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        choices = data.get("choices", [])
-                        if choices:
-                            text = choices[0].get("message", {}).get(
-                                "content", "").strip()
-                            if text.startswith("```json"):
-                                text = text[7:]
-                            if text.startswith("```"):
-                                text = text[3:]
-                            if text.endswith("```"):
-                                text = text[:-3]
-                            return text.strip()
+                    models_to_try = [
+                        "qwen/qwen3.6-27b",
+                        "qwen-2.5-32b",
+                        "qwen/qwen3.8-27b",
+                        "qwen-2.5-coder-32b"
+                    ]
+                    for model_to_use in models_to_try:
+                        resp = await client.post(
+                            "https://api.groq.com/openai/v1/chat/completions",
+                            headers={
+                                "Content-Type": "application/json",
+                                "Authorization": f"Bearer {groq_key.strip()}",
+                            },
+                            json={
+                                "model": model_to_use,
+                                "messages": [
+                                    {"role": "system", "content": system_prompt},
+                                    {"role": "user", "content": user_prompt}
+                                ],
+                                "temperature": 0.1,
+                                "response_format": {"type": "json_object"}
+                            }
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            choices = data.get("choices", [])
+                            if choices:
+                                text = choices[0].get("message", {}).get(
+                                    "content", "").strip()
+                                if text.startswith("```json"):
+                                    text = text[7:]
+                                if text.startswith("```"):
+                                    text = text[3:]
+                                if text.endswith("```"):
+                                    text = text[:-3]
+                                return text.strip()
+                        elif resp.status_code == 404 or "does not exist" in resp.text:
+                            continue
             except Exception as de:
                 print(f"[Groq Client Exception]: {de}")
 

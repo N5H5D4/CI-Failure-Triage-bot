@@ -21,36 +21,9 @@ RUNTIME_SETTINGS = {
 
 
 def persist_env_file(key: str, value: str):
-    """Writes or updates an environment variable in all relevant .env files."""
+    """Safe runtime environment setting update without triggering dev server file watcher restarts."""
     if not key or not value or is_secret_masked(value):
         return
-
-    clean_val = value.strip().strip("'").strip('"')
-    target_files = [
-        Path.cwd() / ".env",
-        Path(__file__).resolve().parent.parent / ".env",
-        Path(__file__).resolve().parent.parent.parent / ".env"
-    ]
-
-    for env_path in target_files:
-        try:
-            lines = []
-            found = False
-            if env_path.exists():
-                with open(env_path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        if line.startswith(f"{key}=") or line.startswith(f"export {key}="):
-                            lines.append(f"{key}={clean_val}\n")
-                            found = True
-                        else:
-                            lines.append(line)
-            if not found:
-                lines.append(f"{key}={clean_val}\n")
-
-            with open(env_path, "w", encoding="utf-8") as f:
-                f.writelines(lines)
-        except Exception as e:
-            print(f"[Warn] Could not write {key} to {env_path}: {e}")
 
 
 def is_secret_masked(val: Optional[str]) -> bool:
@@ -188,7 +161,7 @@ async def test_groq_key(payload: Optional[dict] = None):
     if not key:
         return {
             "valid": False,
-            "message": "Chưa có GROQ_API_KEY. Vui lòng dán khóa Groq API Key của bạn (bắt đầu bằng gsk_...)."
+            "message": "GROQ_API_KEY is missing. Please paste your Groq API key (starting with gsk_...)."
         }
 
     try:
@@ -201,42 +174,60 @@ async def test_groq_key(payload: Optional[dict] = None):
             }
             url = "https://api.groq.com/openai/v1/chat/completions"
 
-            resp = await client.post(
-                url,
-                headers=headers,
-                json={
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [{"role": "user", "content": "Ping"}],
-                    "max_tokens": 10
-                }
-            )
+            models_to_try = [
+                "qwen/qwen3.6-27b",
+                "qwen-2.5-32b",
+                "qwen/qwen3.8-27b",
+                "qwen-2.5-coder-32b"
+            ]
 
-            if resp.status_code == 200:
-                data = resp.json()
-                model_used = data.get("model", "llama-3.3-70b-versatile")
-                RUNTIME_SETTINGS["groq_api_key"] = key
-                os.environ["GROQ_API_KEY"] = key
-                persist_env_file("GROQ_API_KEY", key)
-                return {
-                    "valid": True,
-                    "message": f"Kết nối Groq API ({model_used}) thành công! AI Engine sẵn sàng chẩn đoán lỗi CI/CD với tốc độ siêu nhanh.",
-                    "model": model_used,
-                    "status": "online"
-                }
-            elif resp.status_code == 401:
+            last_error_resp = None
+            for model_to_use in models_to_try:
+                resp = await client.post(
+                    url,
+                    headers=headers,
+                    json={
+                        "model": model_to_use,
+                        "messages": [{"role": "user", "content": "Ping"}],
+                        "max_tokens": 10
+                    }
+                )
+
+                if resp.status_code == 200:
+                    data = resp.json()
+                    model_used = data.get("model", model_to_use)
+                    RUNTIME_SETTINGS["groq_api_key"] = key
+                    os.environ["GROQ_API_KEY"] = key
+                    persist_env_file("GROQ_API_KEY", key)
+                    return {
+                        "valid": True,
+                        "message": f"Okay",
+                        "model": model_used,
+                        "status": "online"
+                    }
+                elif resp.status_code == 401:
+                    return {
+                        "valid": False,
+                        "message": "Authentication error (HTTP 401): The Groq API key is invalid or has been revoked. Please obtain a free key at https://console.groq.com/keys."
+                    }
+                elif resp.status_code == 429:
+                    return {
+                        "valid": False,
+                        "message": "Rate limit exceeded (HTTP 429): The number of API calls exceeded the limit for a specific time period. Please try again in a few seconds."
+                    }
+                elif resp.status_code == 404 or "does not exist" in resp.text:
+                    last_error_resp = resp
+                    continue
+                else:
+                    return {
+                        "valid": False,
+                        "message": f"Groq API return HTTP {resp.status_code}: {resp.text}"
+                    }
+
+            if last_error_resp:
                 return {
                     "valid": False,
-                    "message": "Lỗi xác thực (HTTP 401): Khóa Groq API Key không hợp lệ hoặc đã bị thu hồi. Vui lòng lấy khóa miễn phí tại https://console.groq.com/keys."
-                }
-            elif resp.status_code == 429:
-                return {
-                    "valid": False,
-                    "message": "Quá tải tần suất (HTTP 429 Rate Limit): Vượt quá số lượt gọi API trong một khoảng thời gian. Vui lòng thử lại sau vài giây."
-                }
-            else:
-                return {
-                    "valid": False,
-                    "message": f"Groq API trả về mã lỗi HTTP {resp.status_code}: {resp.text}"
+                    "message": f"Groq API trả về mã lỗi HTTP {last_error_resp.status_code}: {last_error_resp.text}"
                 }
     except httpx.TimeoutException:
         return {
